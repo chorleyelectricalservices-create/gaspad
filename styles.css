@@ -92,3 +92,5 @@ dialog{border:0;border-radius:16px;padding:16px;width:min(560px,94vw);max-height
 .fieldmic{position:absolute;z-index:25;width:40px;height:40px;border-radius:50%;border:0;background:#f59e0b;color:#0f172a;font-size:19px;padding:0;box-shadow:0 1px 3px #0004;touch-action:manipulation}
 :is(input:not([type]),input[type=text],input[type=tel],input[type=email],input[type=search],textarea):not(dialog *){padding-right:50px}
 .updbar{position:fixed;left:0;right:0;bottom:0;z-index:60;border:0;background:#f59e0b;color:#0f172a;font:inherit;font-weight:700;padding:16px;padding-bottom:max(16px,env(safe-area-inset-bottom))}
+.btn.speak{border-color:#f59e0b;background:#fffbeb}.btn.wide{width:100%;margin:0 0 10px}.btn.rec{background:var(--bad);border-color:var(--bad);animation:pulse 1.2s infinite}@keyframes pulse{50%{opacity:.75}}
+.card .apph h2{margin:0}.card>.apph{margin-bottom:10px;gap:8px}

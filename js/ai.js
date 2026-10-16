@@ -79,7 +79,7 @@ export function normForm(raw) {
 export function buildRequest(model, key, b64, mime, prompt, noThinking) {
   return { url: `https://generativelanguage.googleapis.com/v1beta/models/${encodeURIComponent(model)}:generateContent`,
     init: { method: 'POST', headers: { 'Content-Type': 'application/json', 'x-goog-api-key': key },
-      body: JSON.stringify({ contents: [{ role: 'user', parts: [{ inline_data: { mime_type: mime, data: b64 } }, { text: prompt }] }],
+      body: JSON.stringify({ contents: [{ role: 'user', parts: [...(b64 ? [{ inline_data: { mime_type: mime, data: b64 } }] : []), { text: prompt }] }],
         generationConfig: { responseMimeType: 'application/json', ...(noThinking ? {} : { thinkingConfig: { thinkingLevel: 'low' } }) } }) } };
 }
 function httpErr(status, m) {
@@ -95,8 +95,8 @@ export async function askGemini(dataUrl, prompt, deps = {}) {
   const key = deps.key ?? getKey();
   if (!key) throw new AiError('nokey', 'No Gemini API key yet. Add your own free key in Settings → AI photo reading.');
   if ((deps.online ?? (typeof navigator === 'undefined' || navigator.onLine !== false)) === false) throw new AiError('offline', 'You’re offline – photo reading needs a signal. Enter the details by hand or try again later.');
-  const m = String(dataUrl || '').match(/^data:([^;,]+)?(?:;base64)?,(.*)$/); if (!m || !m[2]) throw new AiError('bad', 'No photo.');
-  const mime = m[1] || 'image/jpeg', b64 = m[2];
+  let mime = '', b64 = '';
+  if (dataUrl !== null) { const m = String(dataUrl || '').match(/^data:([^;,]+)?(?:;base64)?,(.*)$/); if (!m || !m[2]) throw new AiError('bad', 'No photo.'); mime = m[1] || 'image/jpeg'; b64 = m[2]; }
   const models = deps.model ? [deps.model] : GEMINI_FALLBACK; const f = deps.fetch || globalThis.fetch; const st = deps.onStatus || (() => {});
   let last;
   for (const model of models) {
@@ -133,3 +133,6 @@ export function badgePlan(app, values) {
   return BADGE_FIELDS.filter(k => values[k]).map(k => ({ k, old: clean(app[k]), val: values[k], on: !clean(app[k]) || clean(app[k]) === values[k] || (k === "gasType" && app[k] === "Natural gas") }))
 ;
 }
+
+/** Text-only Gemini call (e.g. mapping a spoken transcript to fields). */
+export async function askGeminiText(prompt, deps) { return (await askGemini(null, prompt, deps)).json; }

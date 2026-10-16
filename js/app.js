@@ -4,10 +4,11 @@ import { get, set, plus12m, coRatio, newAppliance, isoDate } from './cp12.js';
 import { allocateRef, planRestore, isDuplicate, cleanPrefix } from './refno.js';
 import { lookupPostcode, formatAddress, ADDR_PROVIDERS, getAddrKey, setAddrKey } from './address.js';
 import { fieldKind, normaliseForField, formatPostcode } from './fieldvoice.js';
-import { getKey, setKey, KEY_URL, scanBadge, importForm, badgePlan, BADGE_LABELS, AiError } from './ai.js';
+import { getKey, setKey, KEY_URL, scanBadge, importForm, badgePlan, BADGE_LABELS, AiError, askGeminiText } from './ai.js';
+import { parseSpeech, geminiPrompt, fromGemini } from './speak.js';
 import { buildCp12Pdf, pdfName } from './pdf.js';
 
-export const APP_VERSION = '1.0.3';
+export const APP_VERSION = '1.1.0';
 const $ = s => document.querySelector(s); const main = $('#main');
 const esc = s => String(s ?? '').replace(/[&<>"']/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' })[c]);
 const uid = () => Date.now().toString(36) + Math.random().toString(36).slice(2, 8);
@@ -110,9 +111,11 @@ function renderJob() {
   if (tab === 'details') html += `<div class="btns"><button class="btn" id="copyAddr">Landlord address = property address</button></div>`;
   if (tab === 'appliances') html += appliancesHtml(f);
   for (const sid of t.sections || []) { const s = f.SECTIONS.find(x => x.id === sid);
-    html += `<section class="card"><h2>${esc(s.title)}</h2>${s.fields.map(fd => fieldHtml(fd, get(job.data, fd.k) ?? '', fd.k)).join('')}</section>`; }
+    html += `<section class="card"><div class="apph"><h2>${esc(s.title)}</h2><button class="btn sm speak" data-speak="${sid}">🎙 Speak section</button></div>${s.fields.map(fd => fieldHtml(fd, get(job.data, fd.k) ?? '', fd.k)).join('')}</section>`; }
   if (tab === 'sign') html += signHtml();
   main.innerHTML = html; bindFields(main);
+  main.querySelectorAll('[data-speak]').forEach(b => (b.onclick = () => { const s = f.SECTIONS.find(x => x.id === b.dataset.speak);
+    speakSection(s.title, s.fields.map(fd => ({ ...fd }))); }));
   if (tab === 'details') { bindPhoto('form', importWholeForm); $('#copyAddr').onclick = () => { const a = get(job.data, 'property.address'); if (!a) return toast('Enter the property address first');
     writePath('landlord.address', a); main.querySelector('[data-p="landlord.address"]').value = a; }; }
   if (tab === 'appliances') bindAppliances();
@@ -150,6 +153,7 @@ function appliancesHtml(f) {
   return job.data.appliances.map((a, i) => `<section class="card app ${a.safe === 'No' ? 'unsafe' : ''}" data-i="${i}">
     <div class="apph"><h2>Appliance ${i + 1}${a.location || a.type ? ` – ${esc([a.location, a.type].filter(Boolean).join(', '))}` : ''}</h2>
       <button class="btn danger sm" data-del="${i}" aria-label="Remove">✕</button></div>
+    <button class="btn speak wide" data-speakapp="${i}">🎙 Speak whole appliance</button>
     <div class="scan"><b>🏷 Scan data badge</b><div class="btns">${photoBtns('b' + i)}</div></div>
     <div class="grid2">${f.APPLIANCE_FIELDS.map(fd => fieldHtml(fd, a[fd.k] ?? '', `app.${i}.${fd.k}`)).join('')}</div></section>`).join('')
     + `<button class="btn big pri" id="addApp">＋ Add appliance</button>`;
@@ -159,6 +163,8 @@ function bindAppliances() {
   main.querySelectorAll('[data-del]').forEach(b => (b.onclick = () => { const i = +b.dataset.del; const old = job.data.appliances[i];
     job.data.appliances.splice(i, 1); scheduleSave(); renderJob(); toast('Appliance removed', 6000, { label: 'Undo', fn: () => { job.data.appliances.splice(i, 0, old); scheduleSave(); renderJob(); } }); }));
   job.data.appliances.forEach((a, i) => bindPhoto('b' + i, url => scanBadgeFor(i, url)));
+  main.querySelectorAll('[data-speakapp]').forEach(b => (b.onclick = () => { const i = +b.dataset.speakapp;
+    speakSection(`Appliance ${i + 1}`, formById(job.kind).APPLIANCE_FIELDS.map(fd => ({ ...fd, k: `app.${i}.${fd.k}` }))); }));
 }
 async function scanBadgeFor(i, url) {
   const deps = aiBusy('Reading data badge…'); let r;
@@ -296,6 +302,55 @@ function dictate(el) {
   try { rec.start(); } catch (e) { done = true; closeModal(); noVoice(el, true); }
 };
 
+// ---------- speak a whole section ----------
+function speakSection(title, fields) {
+  let listening = false, rec = null, base = '';
+  modal(`<h2>🎙 ${esc(title)}</h2><p class="muted">Say field names then values, e.g. “location kitchen, make Worcester, model 30si, flue type room sealed, CO 12, CO2 9.1, safe to use yes”.</p>
+    <button class="btn big pri" id="spk">🎙 Tap to talk</button>
+    <label class="f"><span>Transcript (edit, or use your keyboard mic here)</span><textarea id="sptx" rows="4"></textarea></label>
+    <div class="btns"><button class="btn" id="spc">Cancel</button><button class="btn pri" id="spgo">Check & fill →</button></div>`);
+  const tx = $('#sptx'), btn = $('#spk');
+  const stop = () => { listening = false; try { rec?.stop(); } catch {} btn.textContent = '🎙 Tap to talk'; btn.classList.remove('rec'); };
+  const start = () => {
+    if (!SR) return toast('Voice typing isn’t supported in this browser – use your keyboard’s mic in the box below, or try Chrome', 6000);
+    base = tx.value ? tx.value.trim() + ' ' : ''; listening = true; btn.textContent = '⏹ Listening – tap to stop'; btn.classList.add('rec');
+    rec = new SR(); rec.lang = 'en-GB'; rec.continuous = true; rec.interimResults = true;
+    rec.onresult = e => { let fin = '', int = ''; for (let i = 0; i < e.results.length; i++) (e.results[i].isFinal ? (fin += e.results[i][0].transcript + ' ') : (int += e.results[i][0].transcript));
+      tx.value = (base + fin + int).replace(/\s+/g, ' ').trimStart(); if (!int && fin) rec._fin = fin; };
+    rec.onerror = e => { if (e.error === 'no-speech' || e.error === 'aborted') return; stop(); toast(e.error === 'not-allowed' ? 'Microphone blocked – allow it in browser settings' : e.error === 'network' ? 'Voice needs a connection – use your keyboard’s mic' : 'Voice typing not available here – use your keyboard’s mic', 6000); };
+    rec.onend = () => { if (listening) { base = tx.value.trim() + ' '; try { rec.start(); } catch { stop(); } } }; // Chrome stops after silence: keep going until tapped
+    try { rec.start(); } catch { stop(); toast('Couldn’t start the mic'); }
+  };
+  btn.onclick = () => (listening ? stop() : start());
+  $('#spc').onclick = () => { stop(); closeModal(); };
+  $('#spgo').onclick = async () => { stop(); const t = tx.value.trim(); if (!t) return toast('Say or type something first'); await reviewSpeech(title, fields, t); };
+  start();
+}
+async function reviewSpeech(title, fields, transcript) {
+  let rows = parseSpeech(transcript, fields), by = 'offline parser';
+  if (getKey() && navigator.onLine && settings.speakAi !== false) {
+    $('#modalBody').insertAdjacentHTML('beforeend', '<p class="muted" id="spst">Checking with Gemini…</p>');
+    try { const g = fromGemini(await askGeminiText(geminiPrompt(transcript, fields), { model: settings.aiModel || undefined, delayScale: 0.5 }), fields);
+      if (g.length) { const ks = new Set(g.map(r => r.k)); rows = [...g, ...rows.filter(r => !ks.has(r.k))]; by = 'Gemini (+ offline parser)'; } }
+    catch (e) { by = 'offline parser (Gemini unavailable)'; }
+  }
+  const order = fields.map(f => f.k); rows.sort((a, b) => order.indexOf(a.k) - order.indexOf(b.k));
+  const fmap = Object.fromEntries(fields.map(f => [f.k, f]));
+  if (!rows.length) { $('#modalBody').querySelector('#spst')?.remove(); return toast('No field names recognised – start each item with the box name, e.g. “make Worcester”', 6000); }
+  modal(`<h2>Check spoken details</h2><p class="muted">${esc(title)} · read by ${esc(by)}. Edit anything wrong, untick to skip.</p>
+    ${rows.map((r, n) => { const f = fmap[r.k]; const old = readPath(r.k) || '';
+      const input = f.t === 'seg' ? `<select data-val="${n}">${f.opts.map(o => `<option ${o === r.val ? 'selected' : ''}>${esc(o)}</option>`).join('')}</select>`
+        : f.t === 'area' || f.t === 'addr' ? `<textarea data-val="${n}">${esc(r.val)}</textarea>` : `<input data-val="${n}" value="${esc(r.val)}">`;
+      return `<div class="rev"><label class="chk"><input type="checkbox" data-on="${n}" checked> ${esc(f.l)}</label>${input}${old && old !== r.val ? `<small class="muted">Currently: ${esc(old)} (will be replaced)</small>` : ''}</div>`; }).join('')}
+    <details open><summary class="muted">What you said</summary><p class="pre">${esc(transcript)}</p></details>
+    <div class="btns"><button class="btn" id="mclose">Cancel</button><button class="btn" id="spagain">↺ Speak again</button><button class="btn pri" id="spapply">✓ Apply</button></div>`);
+  $('#spagain').onclick = () => speakSection(title, fields);
+  $('#spapply').onclick = () => { const undo = []; rows.forEach((r, n) => { if (!$(`[data-on="${n}"]`).checked) return; const v = $(`[data-val="${n}"]`).value.trim(); if (!v) return;
+      undo.push([r.k, readPath(r.k)]); writePath(r.k, v); });
+    closeModal(); const y = scrollY; renderJob(); scrollTo(0, y);
+    toast(`Filled ${undo.length} box${undo.length === 1 ? '' : 'es'}`, 6000, { label: 'Undo', fn: () => { undo.reverse().forEach(([k, v]) => writePath(k, v ?? '')); renderJob(); } }); };
+}
+
 // ---------- settings, backup ----------
 function renderSettings() {
   top('Settings', 'Saved on this phone', true); const e = settings.engineer || {}; const ef = formById('cp12').SECTIONS.find(s => s.id === 'engineer').fields;
@@ -307,6 +362,7 @@ function renderSettings() {
     <section class="card"><h2>AI photo reading (Google Gemini)</h2><p class="muted">Uses <b>your own</b> free Gemini API key. Kept only on this phone – not in backups. Photos go straight from this phone to Google.</p>
       <label class="f"><span>Gemini API key</span><input id="gk" type="password" autocomplete="off" value="${esc(getKey())}" placeholder="AIza…"></label>
       <p><a href="${KEY_URL}" target="_blank" rel="noopener">Get a free key at Google AI Studio ↗</a></p>
+      <label class="chk"><input type="checkbox" id="spai" ${settings.speakAi !== false ? 'checked' : ''}> Also use Gemini to understand “Speak section” (better accuracy; offline parser used when no signal)</label>
       <label class="f"><span>Model (blank = default with backups)</span><input id="gm" value="${esc(settings.aiModel || '')}" placeholder="gemini-3.8-flash"></label></section>
     <section class="card"><h2>Address lookup</h2><p class="muted">postcodes.io (free) checks the postcode and town. For house-by-house lists add a key:</p>
       <div class="seg" id="ap">${['', ...Object.keys(ADDR_PROVIDERS)].map(p => `<button data-v="${p}" class="${(settings.addrProvider || '') === p ? 'on' : ''}">${p ? ADDR_PROVIDERS[p].label : 'None (free)'}</button>`).join('')}</div>
@@ -324,6 +380,7 @@ function renderSettings() {
   $('#rp').onchange = e => { settings.refPrefix = cleanPrefix(e.target.value) || 'GAS'; saveSettings(); renderSettings(); };
   $('#rn').onchange = e => { settings.nextNumber = Math.max(1, parseInt(e.target.value) || 1); saveSettings(); };
   $('#gk').onchange = e => { setKey(e.target.value); toast('Key saved on this phone'); };
+  $('#spai').onchange = e => { settings.speakAi = e.target.checked; saveSettings(); };
   $('#gm').onchange = e => { settings.aiModel = e.target.value.trim(); saveSettings(); };
   $('#ap').querySelectorAll('button').forEach(b => (b.onclick = () => { settings.addrProvider = b.dataset.v; saveSettings(); renderSettings(); }));
   $('#ak') && ($('#ak').onchange = e => { setAddrKey(settings.addrProvider, e.target.value); toast('Key saved on this phone'); });
