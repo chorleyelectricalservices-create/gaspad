@@ -7,7 +7,7 @@ import { fieldKind, normaliseForField, formatPostcode } from './fieldvoice.js';
 import { getKey, setKey, KEY_URL, scanBadge, importForm, badgePlan, BADGE_LABELS, AiError } from './ai.js';
 import { buildCp12Pdf, pdfName } from './pdf.js';
 
-export const APP_VERSION = '1.0.0';
+export const APP_VERSION = '1.0.1';
 const $ = s => document.querySelector(s); const main = $('#main');
 const esc = s => String(s ?? '').replace(/[&<>"']/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' })[c]);
 const uid = () => Date.now().toString(36) + Math.random().toString(36).slice(2, 8);
@@ -29,7 +29,7 @@ async function saveNow() { if (!job) return; clearTimeout(saveT); job.updated = 
 async function route() {
   if (job) await saveNow();
   const h = location.hash.replace(/^#\/?/, '').split('/');
-  $('#tabs').hidden = true; $('#micFab').hidden = true; scrollTo(0, 0);
+  $('#tabs').hidden = true; scrollTo(0, 0);
   if (h[0] === 'job' && h[1]) { job = await db.getJob(h[1]); if (!job) return (location.hash = '#/'); tab = h[2] || 'details'; return renderJob(); }
   job = null;
   if (h[0] === 'settings') return renderSettings();
@@ -105,7 +105,6 @@ function renderJob() {
   const f = formById(job.kind); top(job.reportNo, f.short + (job.status === 'issued' ? ' · issued' : ' · draft'), true);
   const T = f.TABS; if (!T.some(t => t.id === tab)) tab = T[0].id;
   $('#tabs').hidden = false; $('#tabs').innerHTML = T.map(t => `<a href="#/job/${job.id}/${t.id}" class="${t.id === tab ? 'on' : ''}">${esc(t.label)}${t.id === 'appliances' ? ` <span class="dot n">${job.data.appliances.length}</span>` : ''}</a>`).join('');
-  $('#micFab').hidden = false;
   const t = T.find(x => x.id === tab); let html = '';
   if (tab === 'details') html += `<div class="card ai"><b>📄 Photo import</b><p class="muted">Snap an old CP12 or job sheet – Gemini fills empty fields for you to check.</p><div class="btns">${photoBtns('form')}</div></div>`;
   if (tab === 'details') html += `<div class="btns"><button class="btn" id="copyAddr">Landlord address = property address</button></div>`;
