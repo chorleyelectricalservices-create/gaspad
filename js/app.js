@@ -8,7 +8,7 @@ import { getKey, setKey, KEY_URL, scanBadge, importForm, badgePlan, BADGE_LABELS
 import { parseSpeech, geminiPrompt, fromGemini } from './speak.js';
 import { buildCp12Pdf, pdfName } from './pdf.js';
 
-export const APP_VERSION = '1.1.0';
+export const APP_VERSION = '1.1.1';
 const $ = s => document.querySelector(s); const main = $('#main');
 const esc = s => String(s ?? '').replace(/[&<>"']/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' })[c]);
 const uid = () => Date.now().toString(36) + Math.random().toString(36).slice(2, 8);

@@ -20,7 +20,7 @@ export function buildCp12Pdf(job, settings = {}, jsPDF = globalThis.jspdf?.jsPDF
   y = 26;
   // three party boxes
   const bw = (W - 2 * M - 8) / 3; const boxes = [
-    ['LANDLORD / AGENT', [get(d, 'landlord.name'), get(d, 'landlord.company'), get(d, 'landlord.address'), get(d, 'landlord.phone'), get(d, 'landlord.email')]],
+    ['LANDLORD', [get(d, 'landlord.name'), get(d, 'landlord.company'), get(d, 'landlord.address'), get(d, 'landlord.phone'), get(d, 'landlord.email')]],
     ['PROPERTY (INSTALLATION ADDRESS)', [get(d, 'property.tenant') && `Tenant: ${get(d, 'property.tenant')}`, get(d, 'property.address'), get(d, 'property.phone')]],
     ['ENGINEER', [get(d, 'engineer.name'), get(d, 'engineer.business'), get(d, 'engineer.address'), get(d, 'engineer.phone'),
       `Gas Safe reg no.: ${v(get(d, 'engineer.regNo'))}    ID card no.: ${v(get(d, 'engineer.idCard'))}`]]];

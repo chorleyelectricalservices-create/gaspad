@@ -37,10 +37,10 @@ export const APPLIANCE_FIELDS = [
 
 // Main form sections (keys are dotted paths into job.data)
 export const SECTIONS = [
-  { id: 'landlord', title: 'Landlord / agent', fields: [
-    { k: 'landlord.name', l: 'Landlord / agent name', t: 'text' },
+  { id: 'landlord', title: 'Landlord', fields: [
+    { k: 'landlord.name', l: 'Landlord name', t: 'text' },
     { k: 'landlord.company', l: 'Company (if agent)', t: 'text' },
-    { k: 'landlord.address', l: 'Landlord / agent address', t: 'addr' },
+    { k: 'landlord.address', l: 'Landlord address', t: 'addr' },
     { k: 'landlord.phone', l: 'Phone', t: 'tel' },
     { k: 'landlord.email', l: 'Email', t: 'email' } ] },
   { id: 'property', title: 'Property (installation address)', fields: [
@@ -111,7 +111,7 @@ export function defaults(settings = {}) {
 /** Problems that block/warn before issue. Returns [{lvl:'bad'|'warn', msg, tab}] */
 export function check(d) {
   const out = []; const p = (lvl, msg, tab) => out.push({ lvl, msg, tab });
-  if (!get(d, 'landlord.name')) p('bad', 'Landlord / agent name missing', 'details');
+  if (!get(d, 'landlord.name')) p('bad', 'Landlord name missing', 'details');
   if (!get(d, 'property.address')) p('bad', 'Property address missing', 'details');
   if (!get(d, 'engineer.name')) p('bad', 'Engineer name missing', 'details');
   if (!/^\d{4,7}$/.test(String(get(d, 'engineer.regNo') || '').trim())) p('bad', 'Gas Safe reg no. missing or not a number', 'details');
