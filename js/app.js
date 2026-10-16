@@ -5,10 +5,11 @@ import { allocateRef, planRestore, isDuplicate, cleanPrefix } from './refno.js';
 import { lookupPostcode, formatAddress, ADDR_PROVIDERS, getAddrKey, setAddrKey } from './address.js';
 import { fieldKind, normaliseForField, formatPostcode } from './fieldvoice.js';
 import { getKey, setKey, KEY_URL, scanBadge, importForm, badgePlan, BADGE_LABELS, AiError, askGeminiText } from './ai.js';
+import { Dictation, useContinuous } from './sr.js';
 import { parseSpeech, geminiPrompt, fromGemini } from './speak.js';
 import { buildCp12Pdf, pdfName } from './pdf.js';
 
-export const APP_VERSION = '1.1.2';
+export const APP_VERSION = '1.1.3';
 const $ = s => document.querySelector(s); const main = $('#main');
 const esc = s => String(s ?? '').replace(/[&<>"']/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' })[c]);
 const uid = () => Date.now().toString(36) + Math.random().toString(36).slice(2, 8);
@@ -291,14 +292,14 @@ function dictate(el) {
   const fill = t => { const v = normaliseForField(kind, t); if (!v) return; el.value = el.tagName === 'TEXTAREA' && el.value ? el.value + (/\s$/.test(el.value) ? '' : ' ') + v : v;
     el.dispatchEvent(new Event('input')); el.classList.add('flash'); setTimeout(() => el.classList.remove('flash'), 1500); toast(`${label}: ${v}`); };
   if (!SR) return noVoice(el);
-  const rec = new SR(); rec.lang = 'en-GB'; rec.interimResults = true; let txt = '', done = false;
+  const rec = new SR(); rec.lang = 'en-GB'; rec.interimResults = true; rec.continuous = false; const dict = new Dictation(); let txt = '', done = false;
   modal(`<h2>🎤 ${esc(label)}</h2><div id="vlive" class="vlive">Listening…</div><div class="btns"><button class="btn" id="vc">Cancel</button><button class="btn pri" id="vs">Done</button></div>`);
   $('#vc').onclick = () => { done = true; try { rec.abort(); } catch {} closeModal(); }; $('#vs').onclick = () => { try { rec.stop(); } catch {} };
-  rec.onresult = e => { txt = [...e.results].map(r => r[0].transcript).join(''); $('#vlive') && ($('#vlive').textContent = txt); };
+  rec.onresult = e => { txt = dict.onResults(e.results); $('#vlive') && ($('#vlive').textContent = txt); };
   rec.onerror = e => { if (done) return; done = true; closeModal();
     if (e.error === 'service-not-allowed' || e.error === 'language-not-supported') return noVoice(el, true);
     toast(e.error === 'not-allowed' ? 'Microphone blocked – allow the mic for this site in your browser settings' : e.error === 'network' ? 'Voice needs a connection – use your keyboard’s mic offline' : 'Didn’t catch that – try again'); };
-  rec.onend = () => { if (done) return; done = true; closeModal(); txt.trim() ? fill(txt.trim()) : toast('Didn’t catch that'); };
+  rec.onend = () => { if (done) return; done = true; closeModal(); txt = dict.endSession(); txt.trim() ? fill(txt.trim()) : toast('Didn’t catch that'); };
   try { rec.start(); } catch (e) { done = true; closeModal(); noVoice(el, true); }
 };
 
@@ -309,17 +310,21 @@ function speakSection(title, fields) {
   const bar = document.createElement('div'); bar.id = 'spbar'; bar.className = 'spbar';
   bar.innerHTML = `<span class="pdot"></span><span class="spl"><b>Listening… ${esc(title)}</b><small id="spl"></small></span><button class="btn" id="spx" aria-label="Cancel">✕</button><button class="btn pri" id="spstop">⏹ Stop</button>`;
   document.body.append(bar);
-  let listening = true, text = '', base = '', cancelled = false; const rec = new SR(); rec.lang = 'en-GB'; rec.continuous = true; rec.interimResults = true;
-  const live = () => { const t = text.trim(); $('#spl').textContent = t ? '…' + t.slice(-70) : 'Say e.g. “make Worcester, flue type room sealed”'; };
-  rec.onresult = e => { let fin = '', int = ''; for (let i = 0; i < e.results.length; i++) (e.results[i].isFinal ? (fin += e.results[i][0].transcript + ' ') : (int += e.results[i][0].transcript));
-    text = (base + fin + int).replace(/\s+/g, ' '); live(); };
-  rec.onerror = e => { if (e.error === 'no-speech' || e.error === 'aborted') return; listening = false; bar.remove();
-    if (e.error === 'not-allowed') return toast('Microphone blocked – allow it in browser settings', 6000);
-    typedSpeech(title, fields, text, e.error === 'network' ? 'Voice needs a connection – use your keyboard’s mic below.' : 'Voice typing not available here – use your keyboard’s mic below.'); };
-  rec.onend = () => { if (listening) { base = text.trim() + ' '; try { rec.start(); } catch { finish(); } return; } };
-  const finish = () => { if (!bar.isConnected) return; listening = false; try { rec.stop(); } catch {} bar.remove(); if (!cancelled) reviewSpeech(title, fields, text.trim()); };
+  let listening = true, cancelled = false, rec = null; const dict = new Dictation(); let text = '';
+  const live = () => { const t = text.trim(); const el = $('#spl'); if (el) el.textContent = t ? '…' + t.slice(-70) : 'Say e.g. “make Worcester, flue type room sealed”'; };
+  // Fresh recogniser per session; Android uses one-utterance sessions (continuous mode repeats results there).
+  const startSession = () => {
+    rec = new SR(); rec.lang = 'en-GB'; rec.continuous = useContinuous(); rec.interimResults = true;
+    rec.onresult = e => { text = dict.onResults(e.results); live(); };
+    rec.onerror = e => { if (e.error === 'no-speech' || e.error === 'aborted') return; listening = false; bar.remove();
+      if (e.error === 'not-allowed') return toast('Microphone blocked – allow it in browser settings', 6000);
+      typedSpeech(title, fields, dict.endSession(), e.error === 'network' ? 'Voice needs a connection – use your keyboard’s mic below.' : 'Voice typing not available here – use your keyboard’s mic below.'); };
+    rec.onend = () => { text = dict.endSession(); live(); if (listening) setTimeout(() => { if (!listening) return; try { startSession(); } catch { finish(); } }, 150); };
+    rec.start();
+  };
+  const finish = () => { if (!bar.isConnected) return; listening = false; try { rec?.abort(); } catch {} text = dict.endSession(); bar.remove(); if (!cancelled) reviewSpeech(title, fields, text.trim()); };
   $('#spstop').onclick = finish; $('#spx').onclick = () => { cancelled = true; finish(); };
-  live(); try { rec.start(); } catch { bar.remove(); typedSpeech(title, fields, '', 'Couldn’t start the mic – use your keyboard’s mic below.'); }
+  live(); try { startSession(); } catch { bar.remove(); typedSpeech(title, fields, '', 'Couldn’t start the mic – use your keyboard’s mic below.'); }
 }
 function typedSpeech(title, fields, text = '', note = '') {
   modal(`<h2>🎙 ${esc(title)}</h2>${note ? `<p class="warnp">${esc(note)}</p>` : SR ? '' : '<p class="muted">Voice typing isn’t supported in this browser – tap the box and use your keyboard’s mic, or type.</p>'}
