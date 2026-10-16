@@ -7,7 +7,7 @@ import { fieldKind, normaliseForField, formatPostcode } from './fieldvoice.js';
 import { getKey, setKey, KEY_URL, scanBadge, importForm, badgePlan, BADGE_LABELS, AiError } from './ai.js';
 import { buildCp12Pdf, pdfName } from './pdf.js';
 
-export const APP_VERSION = '1.0.1';
+export const APP_VERSION = '1.0.2';
 const $ = s => document.querySelector(s); const main = $('#main');
 const esc = s => String(s ?? '').replace(/[&<>"']/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' })[c]);
 const uid = () => Date.now().toString(36) + Math.random().toString(36).slice(2, 8);
@@ -263,9 +263,16 @@ function sigPad(who, onDone) {
 
 // ---------- voice dictation into the focused field ----------
 const SR = window.SpeechRecognition || window.webkitSpeechRecognition;
-$('#micFab').onclick = () => {
-  const el = lastField && document.body.contains(lastField) ? lastField : null;
-  if (!el) return toast('Tap a box first, then the mic to dictate into it');
+const MIC_SEL = 'input:not([type]),input[type=text],input[type=tel],input[type=email],input[type=search],input[type=password]:not(#gk):not(#ak),textarea';
+const fmic = $('#fieldMic'); let micEl = null;
+function placeMic() { if (!micEl) return; const r = micEl.getBoundingClientRect(); const s = 40;
+  fmic.style.left = (r.right + scrollX - s - 4) + 'px'; fmic.style.top = (r.top + scrollY + (micEl.tagName === 'TEXTAREA' ? 4 : (r.height - s) / 2)) + 'px'; }
+document.addEventListener('focusin', e => { const el = e.target; if (!(el.matches?.(MIC_SEL)) || el.closest('dialog')) return; micEl = el; lastField = el; fmic.hidden = false; placeMic(); });
+document.addEventListener('focusout', e => { if (e.target === micEl && e.relatedTarget !== fmic) { fmic.hidden = true; micEl = null; } });
+addEventListener('resize', placeMic); document.addEventListener('input', placeMic); document.addEventListener('pointerup', placeMic);
+fmic.addEventListener('pointerdown', e => e.preventDefault()); fmic.addEventListener('mousedown', e => e.preventDefault());
+fmic.onclick = () => { const el = micEl; if (!el) return; fmic.hidden = true; micEl = null; dictate(el); };
+function dictate(el) {
   const label = el.closest('.f')?.querySelector('span')?.textContent || 'field'; const kind = fieldKind(el);
   const fill = t => { const v = normaliseForField(kind, t); if (!v) return; el.value = el.tagName === 'TEXTAREA' && el.value ? el.value + (/\s$/.test(el.value) ? '' : ' ') + v : v;
     el.dispatchEvent(new Event('input')); el.classList.add('flash'); setTimeout(() => el.classList.remove('flash'), 1500); toast(`${label}: ${v}`); };

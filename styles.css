@@ -89,4 +89,5 @@ dialog{border:0;border-radius:16px;padding:16px;width:min(560px,94vw);max-height
 .pre{white-space:pre-wrap;font-size:12px;background:#f1f5f9;padding:8px;border-radius:8px}
 .tabs a .dot.n{background:#f59e0b}
 [hidden]{display:none!important}
-.micbtn{flex:0 0 auto;width:44px;height:44px;border-radius:50%;border:0;background:#f59e0b;color:#0f172a;font-size:22px;box-shadow:0 1px 3px #0004}.micbtn:active{transform:scale(.94)}
+.fieldmic{position:absolute;z-index:25;width:40px;height:40px;border-radius:50%;border:0;background:#f59e0b;color:#0f172a;font-size:19px;padding:0;box-shadow:0 1px 3px #0004;touch-action:manipulation}
+:is(input:not([type]),input[type=text],input[type=tel],input[type=email],input[type=search],textarea):not(dialog *){padding-right:50px}
