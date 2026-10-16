@@ -94,3 +94,7 @@ dialog{border:0;border-radius:16px;padding:16px;width:min(560px,94vw);max-height
 .updbar{position:fixed;left:0;right:0;bottom:0;z-index:60;border:0;background:#f59e0b;color:#0f172a;font:inherit;font-weight:700;padding:16px;padding-bottom:max(16px,env(safe-area-inset-bottom))}
 .btn.speak{border-color:#f59e0b;background:#fffbeb}.btn.wide{width:100%;margin:0 0 10px}.btn.rec{background:var(--bad);border-color:var(--bad);animation:pulse 1.2s infinite}@keyframes pulse{50%{opacity:.75}}
 .card .apph h2{margin:0}.card>.apph{margin-bottom:10px;gap:8px}
+.spbar{position:fixed;left:8px;right:8px;bottom:max(8px,env(safe-area-inset-bottom));z-index:40;display:flex;align-items:center;gap:8px;background:#0f172a;color:#fff;border-radius:14px;padding:6px 6px 6px 12px;box-shadow:0 4px 14px #0006}
+.spbar .spl{flex:1;min-width:0;display:flex;flex-direction:column;font-size:14px}.spbar small{color:#cbd5e1;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.spbar .btn{min-height:42px}.pdot{width:12px;height:12px;border-radius:50%;background:#ef4444;flex:0 0 auto;animation:pd 1s infinite}@keyframes pd{50%{opacity:.25;transform:scale(.7)}}
+body:has(#spbar) main{padding-bottom:160px}

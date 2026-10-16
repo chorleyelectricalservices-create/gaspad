@@ -8,7 +8,7 @@ import { getKey, setKey, KEY_URL, scanBadge, importForm, badgePlan, BADGE_LABELS
 import { parseSpeech, geminiPrompt, fromGemini } from './speak.js';
 import { buildCp12Pdf, pdfName } from './pdf.js';
 
-export const APP_VERSION = '1.1.1';
+export const APP_VERSION = '1.1.2';
 const $ = s => document.querySelector(s); const main = $('#main');
 const esc = s => String(s ?? '').replace(/[&<>"']/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' })[c]);
 const uid = () => Date.now().toString(36) + Math.random().toString(36).slice(2, 8);
@@ -304,47 +304,52 @@ function dictate(el) {
 
 // ---------- speak a whole section ----------
 function speakSection(title, fields) {
-  let listening = false, rec = null, base = '';
-  modal(`<h2>🎙 ${esc(title)}</h2><p class="muted">Say field names then values, e.g. “location kitchen, make Worcester, model 30si, flue type room sealed, CO 12, CO2 9.1, safe to use yes”.</p>
-    <button class="btn big pri" id="spk">🎙 Tap to talk</button>
-    <label class="f"><span>Transcript (edit, or use your keyboard mic here)</span><textarea id="sptx" rows="4"></textarea></label>
-    <div class="btns"><button class="btn" id="spc">Cancel</button><button class="btn pri" id="spgo">Check & fill →</button></div>`);
-  const tx = $('#sptx'), btn = $('#spk');
-  const stop = () => { listening = false; try { rec?.stop(); } catch {} btn.textContent = '🎙 Tap to talk'; btn.classList.remove('rec'); };
-  const start = () => {
-    if (!SR) return toast('Voice typing isn’t supported in this browser – use your keyboard’s mic in the box below, or try Chrome', 6000);
-    base = tx.value ? tx.value.trim() + ' ' : ''; listening = true; btn.textContent = '⏹ Listening – tap to stop'; btn.classList.add('rec');
-    rec = new SR(); rec.lang = 'en-GB'; rec.continuous = true; rec.interimResults = true;
-    rec.onresult = e => { let fin = '', int = ''; for (let i = 0; i < e.results.length; i++) (e.results[i].isFinal ? (fin += e.results[i][0].transcript + ' ') : (int += e.results[i][0].transcript));
-      tx.value = (base + fin + int).replace(/\s+/g, ' ').trimStart(); if (!int && fin) rec._fin = fin; };
-    rec.onerror = e => { if (e.error === 'no-speech' || e.error === 'aborted') return; stop(); toast(e.error === 'not-allowed' ? 'Microphone blocked – allow it in browser settings' : e.error === 'network' ? 'Voice needs a connection – use your keyboard’s mic' : 'Voice typing not available here – use your keyboard’s mic', 6000); };
-    rec.onend = () => { if (listening) { base = tx.value.trim() + ' '; try { rec.start(); } catch { stop(); } } }; // Chrome stops after silence: keep going until tapped
-    try { rec.start(); } catch { stop(); toast('Couldn’t start the mic'); }
-  };
-  btn.onclick = () => (listening ? stop() : start());
-  $('#spc').onclick = () => { stop(); closeModal(); };
-  $('#spgo').onclick = async () => { stop(); const t = tx.value.trim(); if (!t) return toast('Say or type something first'); await reviewSpeech(title, fields, t); };
-  start();
+  if (!SR) return typedSpeech(title, fields);
+  document.querySelector('#spbar')?.remove();
+  const bar = document.createElement('div'); bar.id = 'spbar'; bar.className = 'spbar';
+  bar.innerHTML = `<span class="pdot"></span><span class="spl"><b>Listening… ${esc(title)}</b><small id="spl"></small></span><button class="btn" id="spx" aria-label="Cancel">✕</button><button class="btn pri" id="spstop">⏹ Stop</button>`;
+  document.body.append(bar);
+  let listening = true, text = '', base = '', cancelled = false; const rec = new SR(); rec.lang = 'en-GB'; rec.continuous = true; rec.interimResults = true;
+  const live = () => { const t = text.trim(); $('#spl').textContent = t ? '…' + t.slice(-70) : 'Say e.g. “make Worcester, flue type room sealed”'; };
+  rec.onresult = e => { let fin = '', int = ''; for (let i = 0; i < e.results.length; i++) (e.results[i].isFinal ? (fin += e.results[i][0].transcript + ' ') : (int += e.results[i][0].transcript));
+    text = (base + fin + int).replace(/\s+/g, ' '); live(); };
+  rec.onerror = e => { if (e.error === 'no-speech' || e.error === 'aborted') return; listening = false; bar.remove();
+    if (e.error === 'not-allowed') return toast('Microphone blocked – allow it in browser settings', 6000);
+    typedSpeech(title, fields, text, e.error === 'network' ? 'Voice needs a connection – use your keyboard’s mic below.' : 'Voice typing not available here – use your keyboard’s mic below.'); };
+  rec.onend = () => { if (listening) { base = text.trim() + ' '; try { rec.start(); } catch { finish(); } return; } };
+  const finish = () => { if (!bar.isConnected) return; listening = false; try { rec.stop(); } catch {} bar.remove(); if (!cancelled) reviewSpeech(title, fields, text.trim()); };
+  $('#spstop').onclick = finish; $('#spx').onclick = () => { cancelled = true; finish(); };
+  live(); try { rec.start(); } catch { bar.remove(); typedSpeech(title, fields, '', 'Couldn’t start the mic – use your keyboard’s mic below.'); }
+}
+function typedSpeech(title, fields, text = '', note = '') {
+  modal(`<h2>🎙 ${esc(title)}</h2>${note ? `<p class="warnp">${esc(note)}</p>` : SR ? '' : '<p class="muted">Voice typing isn’t supported in this browser – tap the box and use your keyboard’s mic, or type.</p>'}
+    <p class="muted">Say/type field names then values, e.g. “location kitchen, make Worcester, flue type room sealed, CO 12, safe to use yes”.</p>
+    <label class="f"><span>What to fill in</span><textarea id="sptx" rows="4">${esc(text)}</textarea></label>
+    <div class="btns"><button class="btn" id="mclose">Cancel</button><button class="btn pri" id="spgo">Check & fill →</button></div>`);
+  setTimeout(() => $('#sptx')?.focus(), 50);
+  $('#spgo').onclick = () => reviewSpeech(title, fields, $('#sptx').value.trim());
 }
 async function reviewSpeech(title, fields, transcript) {
-  let rows = parseSpeech(transcript, fields), by = 'offline parser';
-  if (getKey() && navigator.onLine && settings.speakAi !== false) {
-    $('#modalBody').insertAdjacentHTML('beforeend', '<p class="muted" id="spst">Checking with Gemini…</p>');
+  let rows = transcript ? parseSpeech(transcript, fields) : [], by = 'offline parser';
+  if (!transcript) { /* nothing heard: still show the sheet so they can type */ } else if (getKey() && navigator.onLine && settings.speakAi !== false) {
+    toast('Checking with Gemini…', 8000);
     try { const g = fromGemini(await askGeminiText(geminiPrompt(transcript, fields), { model: settings.aiModel || undefined, delayScale: 0.5 }), fields);
       if (g.length) { const ks = new Set(g.map(r => r.k)); rows = [...g, ...rows.filter(r => !ks.has(r.k))]; by = 'Gemini (+ offline parser)'; } }
     catch (e) { by = 'offline parser (Gemini unavailable)'; }
   }
   const order = fields.map(f => f.k); rows.sort((a, b) => order.indexOf(a.k) - order.indexOf(b.k));
   const fmap = Object.fromEntries(fields.map(f => [f.k, f]));
-  if (!rows.length) { $('#modalBody').querySelector('#spst')?.remove(); return toast('No field names recognised – start each item with the box name, e.g. “make Worcester”', 6000); }
   modal(`<h2>Check spoken details</h2><p class="muted">${esc(title)} · read by ${esc(by)}. Edit anything wrong, untick to skip.</p>
+    <label class="f"><span>What you said (edit and tap Re-read if needed)</span><textarea id="sptx" rows="3">${esc(transcript)}</textarea></label>
+    <div class="btns"><button class="btn" id="spre">↻ Re-read</button></div>
+    ${rows.length ? '' : '<p class="warnp">No box names recognised – start each item with the box name, e.g. “make Worcester”.</p>'}
     ${rows.map((r, n) => { const f = fmap[r.k]; const old = readPath(r.k) || '';
       const input = f.t === 'seg' ? `<select data-val="${n}">${f.opts.map(o => `<option ${o === r.val ? 'selected' : ''}>${esc(o)}</option>`).join('')}</select>`
         : f.t === 'area' || f.t === 'addr' ? `<textarea data-val="${n}">${esc(r.val)}</textarea>` : `<input data-val="${n}" value="${esc(r.val)}">`;
       return `<div class="rev"><label class="chk"><input type="checkbox" data-on="${n}" checked> ${esc(f.l)}</label>${input}${old && old !== r.val ? `<small class="muted">Currently: ${esc(old)} (will be replaced)</small>` : ''}</div>`; }).join('')}
-    <details open><summary class="muted">What you said</summary><p class="pre">${esc(transcript)}</p></details>
     <div class="btns"><button class="btn" id="mclose">Cancel</button><button class="btn" id="spagain">↺ Speak again</button><button class="btn pri" id="spapply">✓ Apply</button></div>`);
-  $('#spagain').onclick = () => speakSection(title, fields);
+  $('#spagain').onclick = () => { closeModal(); speakSection(title, fields); };
+  $('#spre').onclick = () => reviewSpeech(title, fields, $('#sptx').value.trim());
   $('#spapply').onclick = () => { const undo = []; rows.forEach((r, n) => { if (!$(`[data-on="${n}"]`).checked) return; const v = $(`[data-val="${n}"]`).value.trim(); if (!v) return;
       undo.push([r.k, readPath(r.k)]); writePath(r.k, v); });
     closeModal(); const y = scrollY; renderJob(); scrollTo(0, y);
