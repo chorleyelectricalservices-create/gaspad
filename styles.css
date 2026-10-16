@@ -98,3 +98,7 @@ dialog{border:0;border-radius:16px;padding:16px;width:min(560px,94vw);max-height
 .spbar .spl{flex:1;min-width:0;display:flex;flex-direction:column;font-size:14px}.spbar small{color:#cbd5e1;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
 .spbar .btn{min-height:42px}.pdot{width:12px;height:12px;border-radius:50%;background:#ef4444;flex:0 0 auto;animation:pd 1s infinite}@keyframes pd{50%{opacity:.25;transform:scale(.7)}}
 body:has(#spbar) main{padding-bottom:160px}
+.job.selmode{display:flex;gap:10px;align-items:flex-start;-webkit-user-select:none;user-select:none;-webkit-touch-callout:none}.job .jb{flex:1;min-width:0}.job .jsel{width:26px;height:26px;min-height:0;margin-top:2px;flex:0 0 auto;pointer-events:none}.job.picked{border-color:var(--acc);background:#ecfdf5}
+.selbar{position:fixed;left:8px;right:8px;bottom:max(8px,env(safe-area-inset-bottom));z-index:40;display:flex;align-items:center;gap:8px;background:#0f172a;color:#fff;border-radius:14px;padding:8px 8px 8px 14px;box-shadow:0 4px 14px #0006}.selbar>span{flex:1}
+.btn.delbtn{background:var(--bad);border-color:var(--bad);color:#fff}.btn.delbtn:disabled{opacity:.5}
+body:has(#selbar) main{padding-bottom:160px}

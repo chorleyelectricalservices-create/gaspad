@@ -9,7 +9,7 @@ import { Dictation, useContinuous } from './sr.js';
 import { parseSpeech, geminiPrompt, fromGemini } from './speak.js';
 import { buildCp12Pdf, pdfName } from './pdf.js';
 
-export const APP_VERSION = '1.1.3';
+export const APP_VERSION = '1.2.0';
 const $ = s => document.querySelector(s); const main = $('#main');
 const esc = s => String(s ?? '').replace(/[&<>"']/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' })[c]);
 const uid = () => Date.now().toString(36) + Math.random().toString(36).slice(2, 8);
@@ -31,7 +31,7 @@ async function saveNow() { if (!job) return; clearTimeout(saveT); job.updated = 
 async function route() {
   if (job) await saveNow();
   const h = location.hash.replace(/^#\/?/, '').split('/');
-  $('#tabs').hidden = true; scrollTo(0, 0);
+  $('#tabs').hidden = true; document.querySelector('#selbar')?.remove(); scrollTo(0, 0);
   if (h[0] === 'job' && h[1]) { job = await db.getJob(h[1]); if (!job) return (location.hash = '#/'); tab = h[2] || 'details'; return renderJob(); }
   job = null;
   if (h[0] === 'settings') return renderSettings();
@@ -43,23 +43,52 @@ addEventListener('hashchange', route);
 
 // ---------- home ----------
 async function renderHome() {
-  top('GasPad', 'Gas safety certificates – offline');
+  top('GasPad', 'Gas safety certificates – offline'); document.querySelector('#selbar')?.remove();
   const jobs = (await db.allJobs()).sort((a, b) => b.updated - a.updated);
   const tiles = FORMS.map(f => `<button class="tile ${f.active ? '' : 'soon'}" data-new="${f.id}" ${f.active ? '' : 'aria-disabled="true"'}>
     <span class="ti">${f.icon}</span><b>${esc(f.short)}</b><small>${f.active ? esc(f.title) : 'Coming soon'}</small></button>`).join('');
   main.innerHTML = `<section class="card"><h2>New certificate</h2><div class="tiles">${tiles}</div></section>
-    <section class="card"><h2>Saved certificates (${jobs.length})</h2>
+    <section class="card"><div class="apph"><h2>Saved certificates (${jobs.length})</h2>${jobs.length ? '<button class="btn sm" id="selBtn">Select</button>' : ''}</div>
     <input class="search" id="q" type="search" placeholder="Search address, landlord, ref…">
+    <label class="chk" id="selAllRow" hidden><input type="checkbox" id="selAll"> <span id="selAllTxt">Select all</span></label>
     <div id="list"></div>${jobs.length ? '' : '<p class="muted">Nothing saved yet. Tap CP12 above to start.</p>'}</section>
     <p class="muted center">GasPad v${APP_VERSION} · data stays on this phone · <a href="#/settings">Settings & backup</a></p>`;
-  const draw = q => { q = q.toLowerCase(); $('#list').innerHTML = jobs.filter(j => !q || JSON.stringify([j.reportNo, j.data?.property, j.data?.landlord]).toLowerCase().includes(q)).map(j => {
+  let selMode = false, q = ''; const sel = new Set();
+  const shown = () => jobs.filter(j => !q || JSON.stringify([j.reportNo, j.data?.property, j.data?.landlord]).toLowerCase().includes(q));
+  const draw = () => { const list = shown(); $('#list').innerHTML = list.map(j => {
     const f = formById(j.kind) || { short: j.kind }; const due = j.data?.issue?.nextDue; const over = due && due < isoDate(new Date());
     const unsafe = (j.data?.appliances || []).some(a => a.safe === 'No');
-    return `<a class="job card inner" href="#/job/${j.id}"><div class="meta"><span><b>${esc(j.reportNo)}</b> · ${esc(f.short)}</span>
+    return `<a class="job card inner ${selMode ? 'selmode' : ''} ${sel.has(j.id) ? 'picked' : ''}" href="#/job/${j.id}" data-id="${j.id}">${selMode ? `<input type="checkbox" class="jsel" tabindex="-1" ${sel.has(j.id) ? 'checked' : ''}>` : ''}<div class="jb"><div class="meta"><span><b>${esc(j.reportNo)}</b> · ${esc(f.short)}</span>
       <span class="badge ${j.status === 'issued' ? 'issued' : 'draft'}">${j.status === 'issued' ? 'Issued' : 'Draft'}</span></div>
       <div>${esc(f.summary?.(j.data) || '(no address yet)')}</div>
-      <div class="meta"><span>${ukDate(j.data?.issue?.date)}${unsafe ? ' · <b class="bad">unsafe appliance</b>' : ''}</span><span class="${over ? 'bad' : ''}">${due ? `Next due ${ukDate(due)}` : ''}</span></div></a>`; }).join(''); };
-  draw(''); $('#q').oninput = e => draw(e.target.value);
+      <div class="meta"><span>${ukDate(j.data?.issue?.date)}${unsafe ? ' · <b class="bad">unsafe appliance</b>' : ''}</span><span class="${over ? 'bad' : ''}">${due ? `Next due ${ukDate(due)}` : ''}</span></div></div></a>`; }).join('');
+    $('#selAllRow').hidden = !selMode; $('#selAllTxt').textContent = `Select all${q ? ' (filtered)' : ''} – ${list.length}`;
+    $('#selAll').checked = list.length > 0 && list.every(j => sel.has(j.id));
+    if ($('#selBtn')) $('#selBtn').textContent = selMode ? 'Done' : 'Select';
+    bar(); };
+  const bar = () => { let b = $('#selbar');
+    if (!selMode) return b?.remove();
+    if (!b) { b = document.createElement('div'); b.id = 'selbar'; b.className = 'selbar'; document.body.append(b); }
+    b.innerHTML = `<span><b>${sel.size}</b> selected</span><button class="btn" id="selCancel">Cancel</button><button class="btn delbtn" id="selDel" ${sel.size ? '' : 'disabled'}>Delete ${sel.size}</button>`;
+    $('#selCancel').onclick = () => setMode(false); $('#selDel').onclick = confirmDel; };
+  const setMode = on => { selMode = on; if (!on) sel.clear(); draw(); };
+  const toggle = id => { sel.has(id) ? sel.delete(id) : sel.add(id); draw(); };
+  const confirmDel = () => { const ids = [...sel]; const issued = jobs.filter(j => sel.has(j.id) && j.status === 'issued').length; const n = ids.length;
+    modal(`<h2>Delete ${n} certificate${n > 1 ? 's' : ''}?</h2><p>This can’t be undone unless you have a backup.</p>${issued ? `<p class="warnp">⚠ ${n === 1 ? 'This certificate has' : issued === n ? `All ${n} have` : `${issued} of these ${issued === 1 ? "has" : "have"}`} been issued – make sure you’ve kept the PDF${issued > 1 ? 's' : ''}.</p>` : ''}
+      <div class="btns"><button class="btn" id="mclose">Cancel</button><button class="btn delbtn" id="delOk">Delete ${n}</button></div>`);
+    $('#delOk').onclick = async () => { for (const id of ids) await db.deleteJob(id); closeModal(); document.querySelector('#selbar')?.remove(); toast(`Deleted ${n} certificate${n > 1 ? 's' : ''}`); renderHome(); }; };
+  draw(); $('#q').oninput = e => { q = e.target.value.toLowerCase(); draw(); };
+  $('#selBtn') && ($('#selBtn').onclick = () => setMode(!selMode));
+  $('#selAll').onchange = e => { shown().forEach(j => (e.target.checked ? sel.add(j.id) : sel.delete(j.id))); draw(); };
+  let lp = null, lpFired = false;
+  $('#list').addEventListener('click', e => { const a = e.target.closest('a[data-id]'); if (!a) return;
+    if (lpFired) { lpFired = false; e.preventDefault(); return; } if (selMode) { e.preventDefault(); toggle(a.dataset.id); } });
+  $('#list').addEventListener('pointerdown', e => { const a = e.target.closest('a[data-id]'); if (!a || selMode) return;
+    const x = e.clientX, y = e.clientY; clearTimeout(lp); lpFired = false;
+    lp = setTimeout(() => { lpFired = true; navigator.vibrate?.(30); selMode = true; sel.add(a.dataset.id); draw(); }, 550);
+    const cancel = ev => { if (ev.type !== 'pointermove' || Math.hypot(ev.clientX - x, ev.clientY - y) > 10) { clearTimeout(lp); off(); } };
+    const off = () => ['pointerup', 'pointercancel', 'pointermove'].forEach(t => removeEventListener(t, cancel)); ['pointerup', 'pointercancel', 'pointermove'].forEach(t => addEventListener(t, cancel)); });
+  $('#list').addEventListener('contextmenu', e => { if (e.target.closest('a[data-id]')) e.preventDefault(); });
   main.querySelectorAll('[data-new]').forEach(b => (b.onclick = () => { const f = formById(b.dataset.new); if (!f.active) return toast(`${f.title} is coming soon`); newJob(f); }));
 }
 async function newJob(f) {
