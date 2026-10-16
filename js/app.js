@@ -7,7 +7,7 @@ import { fieldKind, normaliseForField, formatPostcode } from './fieldvoice.js';
 import { getKey, setKey, KEY_URL, scanBadge, importForm, badgePlan, BADGE_LABELS, AiError } from './ai.js';
 import { buildCp12Pdf, pdfName } from './pdf.js';
 
-export const APP_VERSION = '1.0.2';
+export const APP_VERSION = '1.0.3';
 const $ = s => document.querySelector(s); const main = $('#main');
 const esc = s => String(s ?? '').replace(/[&<>"']/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' })[c]);
 const uid = () => Date.now().toString(36) + Math.random().toString(36).slice(2, 8);
@@ -272,18 +272,28 @@ document.addEventListener('focusout', e => { if (e.target === micEl && e.related
 addEventListener('resize', placeMic); document.addEventListener('input', placeMic); document.addEventListener('pointerup', placeMic);
 fmic.addEventListener('pointerdown', e => e.preventDefault()); fmic.addEventListener('mousedown', e => e.preventDefault());
 fmic.onclick = () => { const el = micEl; if (!el) return; fmic.hidden = true; micEl = null; dictate(el); };
+function noVoice(el, blocked) {
+  const ios = /iPhone|iPad|iPod/.test(navigator.userAgent) || (navigator.platform === 'MacIntel' && navigator.maxTouchPoints > 1);
+  const standalone = matchMedia('(display-mode: standalone)').matches || navigator.standalone;
+  modal(`<h2>🎤 Voice typing</h2><p>${blocked ? 'Voice typing isn’t available here right now.' : 'Voice typing isn’t supported in this browser.'} Use your keyboard’s mic instead, or try Chrome.</p>
+    ${ios ? `<p class="muted">iPhone: tap the box, then the 🎤 on the keyboard (Settings → General → Keyboard → Enable Dictation).${standalone ? ' Voice typing often doesn’t work in home-screen apps on iPhone – opening GasPad in Safari may help.' : ''}</p>` : '<p class="muted">Android: tap the box, then the 🎤 on the keyboard (Gboard / Samsung keyboard).</p>'}
+    <div class="btns"><button class="btn pri" id="nvok">OK – use keyboard</button></div>`);
+  $('#nvok').onclick = () => { closeModal(); el?.focus(); };
+}
 function dictate(el) {
   const label = el.closest('.f')?.querySelector('span')?.textContent || 'field'; const kind = fieldKind(el);
   const fill = t => { const v = normaliseForField(kind, t); if (!v) return; el.value = el.tagName === 'TEXTAREA' && el.value ? el.value + (/\s$/.test(el.value) ? '' : ' ') + v : v;
     el.dispatchEvent(new Event('input')); el.classList.add('flash'); setTimeout(() => el.classList.remove('flash'), 1500); toast(`${label}: ${v}`); };
-  if (!SR) return toast('Voice input not supported here – use the keyboard mic (Gboard) instead');
+  if (!SR) return noVoice(el);
   const rec = new SR(); rec.lang = 'en-GB'; rec.interimResults = true; let txt = '', done = false;
   modal(`<h2>🎤 ${esc(label)}</h2><div id="vlive" class="vlive">Listening…</div><div class="btns"><button class="btn" id="vc">Cancel</button><button class="btn pri" id="vs">Done</button></div>`);
   $('#vc').onclick = () => { done = true; try { rec.abort(); } catch {} closeModal(); }; $('#vs').onclick = () => { try { rec.stop(); } catch {} };
   rec.onresult = e => { txt = [...e.results].map(r => r[0].transcript).join(''); $('#vlive') && ($('#vlive').textContent = txt); };
-  rec.onerror = e => { if (done) return; done = true; closeModal(); toast(e.error === 'not-allowed' ? 'Microphone blocked – allow it in Chrome site settings' : e.error === 'network' ? 'Voice needs a connection – use the keyboard mic offline' : 'Didn’t catch that'); };
+  rec.onerror = e => { if (done) return; done = true; closeModal();
+    if (e.error === 'service-not-allowed' || e.error === 'language-not-supported') return noVoice(el, true);
+    toast(e.error === 'not-allowed' ? 'Microphone blocked – allow the mic for this site in your browser settings' : e.error === 'network' ? 'Voice needs a connection – use your keyboard’s mic offline' : 'Didn’t catch that – try again'); };
   rec.onend = () => { if (done) return; done = true; closeModal(); txt.trim() ? fill(txt.trim()) : toast('Didn’t catch that'); };
-  try { rec.start(); } catch (e) { closeModal(); toast('Could not start the mic'); }
+  try { rec.start(); } catch (e) { done = true; closeModal(); noVoice(el, true); }
 };
 
 // ---------- settings, backup ----------
@@ -328,9 +338,19 @@ function renderSettings() {
     toast(`Restored ${plan.jobs.length} certificate(s)${plan.renamed.length ? `, ${plan.renamed.length} renumbered` : ''}`); renderSettings(); };
 }
 
+function updateBanner() {
+  if ($('#upd')) return; const b = document.createElement('button'); b.id = 'upd'; b.className = 'updbar';
+  b.textContent = 'GasPad update available – tap to refresh'; b.onclick = async () => { await saveNow(); location.reload(); }; document.body.prepend(b);
+}
 // ---------- boot ----------
 (async () => {
   const s = await db.getKV('settings'); if (s) settings = { ...settings, ...s };
-  if ('serviceWorker' in navigator && location.protocol === 'https:') navigator.serviceWorker.register('sw.js').catch(() => {});
+  if ('serviceWorker' in navigator && location.protocol === 'https:') {
+    const had = !!navigator.serviceWorker.controller; let shown = false;
+    navigator.serviceWorker.addEventListener('controllerchange', () => { if (!had || shown) return; shown = true; updateBanner(); });
+    navigator.serviceWorker.register('sw.js', { updateViaCache: 'none' }).then(reg => {
+      const chk = () => reg.update().catch(() => {}); document.addEventListener('visibilitychange', () => document.visibilityState === 'visible' && chk()); setInterval(chk, 30 * 60e3);
+    }).catch(() => {});
+  }
   route();
 })();
