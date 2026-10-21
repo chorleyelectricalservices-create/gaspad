@@ -9,7 +9,7 @@ import { Dictation, useContinuous } from './sr.js';
 import { parseSpeech, geminiPrompt, fromGemini } from './speak.js';
 import { buildCp12Pdf, pdfName } from './pdf.js';
 
-export const APP_VERSION = '1.2.0';
+export const APP_VERSION = '1.2.1';
 const $ = s => document.querySelector(s); const main = $('#main');
 const esc = s => String(s ?? '').replace(/[&<>"']/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' })[c]);
 const uid = () => Date.now().toString(36) + Math.random().toString(36).slice(2, 8);
@@ -141,7 +141,7 @@ function renderJob() {
   if (tab === 'details') html += `<div class="btns"><button class="btn" id="copyAddr">Landlord address = property address</button></div>`;
   if (tab === 'appliances') html += appliancesHtml(f);
   for (const sid of t.sections || []) { const s = f.SECTIONS.find(x => x.id === sid);
-    html += `<section class="card"><div class="apph"><h2>${esc(s.title)}</h2><button class="btn sm speak" data-speak="${sid}">🎙 Speak section</button></div>${s.fields.map(fd => fieldHtml(fd, get(job.data, fd.k) ?? '', fd.k)).join('')}</section>`; }
+    html += `<section class="card"><div class="apph"><h2>${esc(s.title)}</h2><button class="btn sm speak" data-speak="${sid}">🎙 Dictate</button></div>${s.fields.map(fd => fieldHtml(fd, get(job.data, fd.k) ?? '', fd.k)).join('')}</section>`; }
   if (tab === 'sign') html += signHtml();
   main.innerHTML = html; bindFields(main);
   main.querySelectorAll('[data-speak]').forEach(b => (b.onclick = () => { const s = f.SECTIONS.find(x => x.id === b.dataset.speak);
@@ -183,7 +183,7 @@ function appliancesHtml(f) {
   return job.data.appliances.map((a, i) => `<section class="card app ${a.safe === 'No' ? 'unsafe' : ''}" data-i="${i}">
     <div class="apph"><h2>Appliance ${i + 1}${a.location || a.type ? ` – ${esc([a.location, a.type].filter(Boolean).join(', '))}` : ''}</h2>
       <button class="btn danger sm" data-del="${i}" aria-label="Remove">✕</button></div>
-    <button class="btn speak wide" data-speakapp="${i}">🎙 Speak whole appliance</button>
+    <button class="btn speak wide" data-speakapp="${i}">🎙 Dictate</button>
     <div class="scan"><b>🏷 Scan data badge</b><div class="btns">${photoBtns('b' + i)}</div></div>
     <div class="grid2">${f.APPLIANCE_FIELDS.map(fd => fieldHtml(fd, a[fd.k] ?? '', `app.${i}.${fd.k}`)).join('')}</div></section>`).join('')
     + `<button class="btn big pri" id="addApp">＋ Add appliance</button>`;
@@ -381,7 +381,7 @@ async function reviewSpeech(title, fields, transcript) {
       const input = f.t === 'seg' ? `<select data-val="${n}">${f.opts.map(o => `<option ${o === r.val ? 'selected' : ''}>${esc(o)}</option>`).join('')}</select>`
         : f.t === 'area' || f.t === 'addr' ? `<textarea data-val="${n}">${esc(r.val)}</textarea>` : `<input data-val="${n}" value="${esc(r.val)}">`;
       return `<div class="rev"><label class="chk"><input type="checkbox" data-on="${n}" checked> ${esc(f.l)}</label>${input}${old && old !== r.val ? `<small class="muted">Currently: ${esc(old)} (will be replaced)</small>` : ''}</div>`; }).join('')}
-    <div class="btns"><button class="btn" id="mclose">Cancel</button><button class="btn" id="spagain">↺ Speak again</button><button class="btn pri" id="spapply">✓ Apply</button></div>`);
+    <div class="btns"><button class="btn" id="mclose">Cancel</button><button class="btn" id="spagain">↺ Dictate again</button><button class="btn pri" id="spapply">✓ Apply</button></div>`);
   $('#spagain').onclick = () => { closeModal(); speakSection(title, fields); };
   $('#spre').onclick = () => reviewSpeech(title, fields, $('#sptx').value.trim());
   $('#spapply').onclick = () => { const undo = []; rows.forEach((r, n) => { if (!$(`[data-on="${n}"]`).checked) return; const v = $(`[data-val="${n}"]`).value.trim(); if (!v) return;
@@ -401,7 +401,7 @@ function renderSettings() {
     <section class="card"><h2>AI photo reading (Google Gemini)</h2><p class="muted">Uses <b>your own</b> free Gemini API key. Kept only on this phone – not in backups. Photos go straight from this phone to Google.</p>
       <label class="f"><span>Gemini API key</span><input id="gk" type="password" autocomplete="off" value="${esc(getKey())}" placeholder="AIza…"></label>
       <p><a href="${KEY_URL}" target="_blank" rel="noopener">Get a free key at Google AI Studio ↗</a></p>
-      <label class="chk"><input type="checkbox" id="spai" ${settings.speakAi !== false ? 'checked' : ''}> Also use Gemini to understand “Speak section” (better accuracy; offline parser used when no signal)</label>
+      <label class="chk"><input type="checkbox" id="spai" ${settings.speakAi !== false ? 'checked' : ''}> Also use Gemini to understand “Dictate” (better accuracy; offline parser used when no signal)</label>
       <label class="f"><span>Model (blank = default with backups)</span><input id="gm" value="${esc(settings.aiModel || '')}" placeholder="gemini-3.8-flash"></label></section>
     <section class="card"><h2>Address lookup</h2><p class="muted">postcodes.io (free) checks the postcode and town. For house-by-house lists add a key:</p>
       <div class="seg" id="ap">${['', ...Object.keys(ADDR_PROVIDERS)].map(p => `<button data-v="${p}" class="${(settings.addrProvider || '') === p ? 'on' : ''}">${p ? ADDR_PROVIDERS[p].label : 'None (free)'}</button>`).join('')}</div>
