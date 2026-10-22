@@ -1,15 +1,17 @@
 import { db } from './db.js';
 import { FORMS, formById } from './forms.js';
-import { get, set, plus12m, coRatio, newAppliance, isoDate } from './cp12.js';
+import { get, set, plus12m, coRatio, isoDate } from './cp12.js';
+import { icon, MARK } from './icons.js';
+import { importPrompt, normImport } from './importer.js';
 import { allocateRef, planRestore, isDuplicate, cleanPrefix } from './refno.js';
 import { lookupPostcode, formatAddress, ADDR_PROVIDERS, getAddrKey, setAddrKey } from './address.js';
 import { fieldKind, normaliseForField, formatPostcode } from './fieldvoice.js';
-import { getKey, setKey, KEY_URL, scanBadge, importForm, badgePlan, BADGE_LABELS, AiError, askGeminiText } from './ai.js';
+import { getKey, setKey, KEY_URL, scanBadge, badgePlan, BADGE_LABELS, AiError, askGeminiText, askGemini } from './ai.js';
 import { Dictation, useContinuous } from './sr.js';
 import { parseSpeech, geminiPrompt, fromGemini } from './speak.js';
-import { buildCp12Pdf, pdfName } from './pdf.js';
+import { buildPdf, pdfName } from './pdf.js';
 
-export const APP_VERSION = '1.2.1';
+export const APP_VERSION = '2.0.0';
 const $ = s => document.querySelector(s); const main = $('#main');
 const esc = s => String(s ?? '').replace(/[&<>"']/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' })[c]);
 const uid = () => Date.now().toString(36) + Math.random().toString(36).slice(2, 8);
@@ -21,7 +23,7 @@ function toast(msg, ms = 3500, act) { const t = $('#toast'); t.innerHTML = esc(m
   if (act) $('#tact').onclick = () => { t.hidden = true; act.fn(); }; clearTimeout(toast.t); toast.t = setTimeout(() => (t.hidden = true), ms); }
 function modal(html) { $('#modalBody').innerHTML = html; const m = $('#modal'); if (!m.open) m.showModal(); $('#modalBody').querySelectorAll('#mclose').forEach(b => (b.onclick = closeModal)); }
 const closeModal = () => $('#modal').close();
-function top(title, sub = '', back = false) { $('#topTitle').textContent = title; $('#topSub').textContent = sub; $('#backBtn').hidden = !back; }
+function top(title, sub = '', back = false) { $('#topTitle').textContent = title; $('#topSub').textContent = sub; $('#backBtn').hidden = !back; $('#mark').hidden = back; }
 
 async function saveSettings() { await db.setKV('settings', settings); }
 function scheduleSave() { $('#saveState').textContent = '…'; clearTimeout(saveT); saveT = setTimeout(saveNow, 400); }
@@ -31,38 +33,49 @@ async function saveNow() { if (!job) return; clearTimeout(saveT); job.updated = 
 async function route() {
   if (job) await saveNow();
   const h = location.hash.replace(/^#\/?/, '').split('/');
-  $('#tabs').hidden = true; document.querySelector('#selbar')?.remove(); scrollTo(0, 0);
+  $('#tabs').hidden = true; $('#toast').hidden = true; document.querySelector('#selbar')?.remove(); fab(''); document.body.classList.remove('inform'); scrollTo(0, 0);
   if (h[0] === 'job' && h[1]) { job = await db.getJob(h[1]); if (!job) return (location.hash = '#/'); tab = h[2] || 'details'; return renderJob(); }
   job = null;
   if (h[0] === 'settings') return renderSettings();
   return renderHome();
 }
 $('#backBtn').onclick = () => (location.hash = '#/');
+$('#mark').innerHTML = MARK;
 $('#settingsBtn').onclick = () => (location.hash = '#/settings');
 addEventListener('hashchange', route);
 
 // ---------- home ----------
+const FORM_TONE = { cp12: 'green', service: 'blue', warning: 'red', commission: 'violet', tightness: 'amber' };
+const pill = f => `<span class="tpill ${FORM_TONE[f.id] || ''}">${icon(f.icon)}${esc(f.short)}</span>`;
+function pickerHtml() {
+  return `<div class="tiles">${FORMS.map(f => `<button class="tile ${FORM_TONE[f.id]}" data-new="${f.id}"><span class="ti">${icon(f.icon)}</span><b>${esc(f.short)}</b><small>${esc(f.title)}</small></button>`).join('')}</div>`;
+}
+function bindPicker(root) { root.querySelectorAll('[data-new]').forEach(b => (b.onclick = () => { closeModal(); newJob(formById(b.dataset.new)); })); }
 async function renderHome() {
-  top('GasPad', 'Gas safety certificates – offline'); document.querySelector('#selbar')?.remove();
+  top('GasPad', 'Gas certificates · works offline'); document.querySelector('#selbar')?.remove(); document.body.classList.remove('inform');
   const jobs = (await db.allJobs()).sort((a, b) => b.updated - a.updated);
-  const tiles = FORMS.map(f => `<button class="tile ${f.active ? '' : 'soon'}" data-new="${f.id}" ${f.active ? '' : 'aria-disabled="true"'}>
-    <span class="ti">${f.icon}</span><b>${esc(f.short)}</b><small>${f.active ? esc(f.title) : 'Coming soon'}</small></button>`).join('');
-  main.innerHTML = `<section class="card"><h2>New certificate</h2><div class="tiles">${tiles}</div></section>
-    <section class="card"><div class="apph"><h2>Saved certificates (${jobs.length})</h2>${jobs.length ? '<button class="btn sm" id="selBtn">Select</button>' : ''}</div>
-    <input class="search" id="q" type="search" placeholder="Search address, landlord, ref…">
+  const dueSoon = jobs.filter(j => { const d = j.data?.issue?.nextDue; return d && d >= isoDate(new Date()) && d <= isoDate(new Date(Date.now() + 30 * 864e5)); }).length;
+  main.innerHTML = `<section class="hero"><div><h1>Good ${new Date().getHours() < 12 ? 'morning' : new Date().getHours() < 18 ? 'afternoon' : 'evening'}${settings.engineer?.name ? ', ' + esc(settings.engineer.name.split(' ')[0]) : ''}</h1>
+      <p>${jobs.length} saved · ${jobs.filter(j => j.status !== 'issued').length} drafts${dueSoon ? ` · <b>${dueSoon} due within 30 days</b>` : ''}</p></div><span class="heromark">${MARK}</span></section>
+    <section class="card"><h2>New certificate</h2>${pickerHtml()}</section>
+    <section class="card"><div class="apph"><h2>Saved certificates <span class="count">${jobs.length}</span></h2>${jobs.length ? '<button class="btn sm ghost" id="selBtn">Select</button>' : ''}</div>
+    <input class="search" id="q" type="search" placeholder="Search address, name, ref…">
+    <div class="chips" id="chips"><button class="chip on" data-k="">All</button>${FORMS.map(f => `<button class="chip" data-k="${f.id}">${esc(f.short)}</button>`).join('')}</div>
     <label class="chk" id="selAllRow" hidden><input type="checkbox" id="selAll"> <span id="selAllTxt">Select all</span></label>
-    <div id="list"></div>${jobs.length ? '' : '<p class="muted">Nothing saved yet. Tap CP12 above to start.</p>'}</section>
+    <div id="list"></div>${jobs.length ? '' : '<div class="empty">Nothing saved yet – pick a certificate above to start.</div>'}</section>
     <p class="muted center">GasPad v${APP_VERSION} · data stays on this phone · <a href="#/settings">Settings & backup</a></p>`;
-  let selMode = false, q = ''; const sel = new Set();
-  const shown = () => jobs.filter(j => !q || JSON.stringify([j.reportNo, j.data?.property, j.data?.landlord]).toLowerCase().includes(q));
+  bindPicker(main);
+  let selMode = false, q = '', kind = ''; const sel = new Set();
+  const shown = () => jobs.filter(j => (!kind || j.kind === kind) && (!q || JSON.stringify([j.reportNo, j.data?.property, j.data?.landlord, j.data?.customer, j.data?.resp]).toLowerCase().includes(q)));
   const draw = () => { const list = shown(); $('#list').innerHTML = list.map(j => {
-    const f = formById(j.kind) || { short: j.kind }; const due = j.data?.issue?.nextDue; const over = due && due < isoDate(new Date());
-    const unsafe = (j.data?.appliances || []).some(a => a.safe === 'No');
-    return `<a class="job card inner ${selMode ? 'selmode' : ''} ${sel.has(j.id) ? 'picked' : ''}" href="#/job/${j.id}" data-id="${j.id}">${selMode ? `<input type="checkbox" class="jsel" tabindex="-1" ${sel.has(j.id) ? 'checked' : ''}>` : ''}<div class="jb"><div class="meta"><span><b>${esc(j.reportNo)}</b> · ${esc(f.short)}</span>
-      <span class="badge ${j.status === 'issued' ? 'issued' : 'draft'}">${j.status === 'issued' ? 'Issued' : 'Draft'}</span></div>
-      <div>${esc(f.summary?.(j.data) || '(no address yet)')}</div>
-      <div class="meta"><span>${ukDate(j.data?.issue?.date)}${unsafe ? ' · <b class="bad">unsafe appliance</b>' : ''}</span><span class="${over ? 'bad' : ''}">${due ? `Next due ${ukDate(due)}` : ''}</span></div></div></a>`; }).join('');
-    $('#selAllRow').hidden = !selMode; $('#selAllTxt').textContent = `Select all${q ? ' (filtered)' : ''} – ${list.length}`;
+    const f = formById(j.kind) || { short: j.kind, id: j.kind }; const due = j.data?.issue?.nextDue; const over = due && due < isoDate(new Date());
+    const unsafe = (j.data?.appliances || []).some(a => a.safe === 'No') || j.data?.t?.result === 'Fail' || j.kind === 'warning';
+    return `<a class="job ${selMode ? 'selmode' : ''} ${sel.has(j.id) ? 'picked' : ''}" href="#/job/${j.id}" data-id="${j.id}">${selMode ? `<input type="checkbox" class="jsel" tabindex="-1" ${sel.has(j.id) ? 'checked' : ''}>` : ''}<div class="jb">
+      <div class="meta">${pill(f)}<span class="badge ${j.status === 'issued' ? 'issued' : 'draft'}">${j.status === 'issued' ? 'Issued' : 'Draft'}</span></div>
+      <div class="jt">${esc(f.summary?.(j.data) || '(no address yet)')}</div>
+      <div class="meta"><span><b>${esc(j.reportNo)}</b> · ${ukDate(j.data?.issue?.date)}${unsafe && j.kind !== 'warning' ? ' · <b class="bad">unsafe</b>' : ''}</span><span class="${over ? 'bad' : ''}">${due ? `Due ${ukDate(due)}` : ''}</span></div></div></a>`; }).join('')
+      || (jobs.length ? '<div class="empty">No matches</div>' : '');
+    $('#selAllRow').hidden = !selMode; $('#selAllTxt').textContent = `Select all${q || kind ? ' (filtered)' : ''} – ${list.length}`;
     $('#selAll').checked = list.length > 0 && list.every(j => sel.has(j.id));
     if ($('#selBtn')) $('#selBtn').textContent = selMode ? 'Done' : 'Select';
     bar(); };
@@ -74,10 +87,11 @@ async function renderHome() {
   const setMode = on => { selMode = on; if (!on) sel.clear(); draw(); };
   const toggle = id => { sel.has(id) ? sel.delete(id) : sel.add(id); draw(); };
   const confirmDel = () => { const ids = [...sel]; const issued = jobs.filter(j => sel.has(j.id) && j.status === 'issued').length; const n = ids.length;
-    modal(`<h2>Delete ${n} certificate${n > 1 ? 's' : ''}?</h2><p>This can’t be undone unless you have a backup.</p>${issued ? `<p class="warnp">⚠ ${n === 1 ? 'This certificate has' : issued === n ? `All ${n} have` : `${issued} of these ${issued === 1 ? "has" : "have"}`} been issued – make sure you’ve kept the PDF${issued > 1 ? 's' : ''}.</p>` : ''}
+    modal(`<h2>Delete ${n} certificate${n > 1 ? 's' : ''}?</h2><p>This can’t be undone unless you have a backup.</p>${issued ? `<p class="warnp">⚠ ${n === 1 ? 'This certificate has' : issued === n ? `All ${n} have` : `${issued} of these ${issued === 1 ? 'has' : 'have'}`} been issued – make sure you’ve kept the PDF${issued > 1 ? 's' : ''}.</p>` : ''}
       <div class="btns"><button class="btn" id="mclose">Cancel</button><button class="btn delbtn" id="delOk">Delete ${n}</button></div>`);
     $('#delOk').onclick = async () => { for (const id of ids) await db.deleteJob(id); closeModal(); document.querySelector('#selbar')?.remove(); toast(`Deleted ${n} certificate${n > 1 ? 's' : ''}`); renderHome(); }; };
   draw(); $('#q').oninput = e => { q = e.target.value.toLowerCase(); draw(); };
+  $('#chips').querySelectorAll('.chip').forEach(c => (c.onclick = () => { kind = c.dataset.k; $('#chips').querySelectorAll('.chip').forEach(x => x.classList.toggle('on', x === c)); draw(); }));
   $('#selBtn') && ($('#selBtn').onclick = () => setMode(!selMode));
   $('#selAll').onchange = e => { shown().forEach(j => (e.target.checked ? sel.add(j.id) : sel.delete(j.id))); draw(); };
   let lp = null, lpFired = false;
@@ -89,69 +103,86 @@ async function renderHome() {
     const cancel = ev => { if (ev.type !== 'pointermove' || Math.hypot(ev.clientX - x, ev.clientY - y) > 10) { clearTimeout(lp); off(); } };
     const off = () => ['pointerup', 'pointercancel', 'pointermove'].forEach(t => removeEventListener(t, cancel)); ['pointerup', 'pointercancel', 'pointermove'].forEach(t => addEventListener(t, cancel)); });
   $('#list').addEventListener('contextmenu', e => { if (e.target.closest('a[data-id]')) e.preventDefault(); });
-  main.querySelectorAll('[data-new]').forEach(b => (b.onclick = () => { const f = formById(b.dataset.new); if (!f.active) return toast(`${f.title} is coming soon`); newJob(f); }));
+  fab(`${icon('plus')}<span>New</span>`, () => { modal(`<h2>New certificate</h2>${pickerHtml()}<div class="btns"><button class="btn" id="mclose">Cancel</button></div>`); bindPicker($('#modalBody')); });
 }
-async function newJob(f) {
+function fab(html, fn) { const b = $('#fab'); if (!html) { b.hidden = true; return; } b.innerHTML = html; b.hidden = false; b.onclick = fn; }
+async function newJob(f, data) {
   const jobs = await db.allJobs(); const a = allocateRef(settings, jobs, new Date(), f.code);
   settings.nextNumber = a.next; await saveSettings();
-  const j = { id: uid(), kind: f.id, reportNo: a.ref, status: 'draft', created: Date.now(), updated: Date.now(), data: f.defaults(settings) };
-  await db.putJob(j); location.hash = `#/job/${j.id}/details`;
+  const j = { id: uid(), kind: f.id, reportNo: a.ref, status: 'draft', created: Date.now(), updated: Date.now(), data: data || f.defaults(settings) };
+  f.compute?.(j.data); await db.putJob(j); location.hash = `#/job/${j.id}/details`; return j;
 }
 
 // ---------- field rendering ----------
+const isNeg = o => /^(No|Fail|Refused|ID)$/.test(o);
 function fieldHtml(fd, val, path) {
   const id = 'f_' + path.replace(/\W/g, '_'); const lab = `<span>${esc(fd.l)}</span>`;
-  if (fd.t === 'seg') return `<div class="f" data-seg="${path}">${lab}<div class="seg">${fd.opts.map(o => `<button type="button" data-v="${esc(o)}" class="${val === o ? 'on' : ''} ${/^(No|Fail)$/.test(o) ? 'neg' : ''}">${esc(o)}</button>`).join('')}</div></div>`;
-  if (fd.t === 'area') return `<label class="f">${lab}<textarea data-p="${path}" id="${id}">${esc(val)}</textarea></label>`;
-  if (fd.t === 'addr') return `<div class="f">${lab}<div class="pcrow"><input data-kind="postcode" placeholder="Postcode" id="${id}_pc" autocomplete="off"><button type="button" class="btn" data-pc="${path}">Find</button></div>
+  if (fd.t === 'seg') return `<div class="f" data-seg="${path}">${lab}<div class="seg">${fd.opts.map(o => `<button type="button" data-v="${esc(o)}" class="${val === o ? 'on' : ''} ${isNeg(o) ? 'neg' : /^(Yes|Pass|Agreed)$/.test(o) ? 'pos' : ''}">${esc(o)}</button>`).join('')}</div></div>`;
+  if (fd.t === 'calc') return `<div class="f calc">${lab}<output data-calc="${path}" class="${/^Fail/.test(val) ? 'bad' : /^Pass/.test(val) ? 'ok' : ''}">${esc(val) || '–'}</output></div>`;
+  if (fd.t === 'area') return `<label class="f wide">${lab}<textarea data-p="${path}" id="${id}">${esc(val)}</textarea></label>`;
+  if (fd.t === 'addr') return `<div class="f wide">${lab}<div class="pcrow"><input data-kind="postcode" placeholder="Postcode" id="${id}_pc" autocomplete="off"><button type="button" class="btn" data-pc="${path}">Find</button></div>
     <textarea data-p="${path}" id="${id}" placeholder="House / street&#10;Town&#10;Postcode">${esc(val)}</textarea></div>`;
   if (fd.t === 'list') return `<label class="f">${lab}<input data-p="${path}" id="${id}" list="dl_${id}" value="${esc(val)}"><datalist id="dl_${id}">${fd.opts.map(o => `<option value="${esc(o)}">`).join('')}</datalist></label>`;
   const type = fd.t === 'date' ? 'date' : fd.t === 'tel' ? 'tel' : fd.t === 'email' ? 'email' : 'text';
   const im = fd.t === 'num' ? 'decimal' : fd.im || '';
   return `<label class="f">${lab}<input data-p="${path}" id="${id}" type="${type}" ${im ? `inputmode="${im}"` : ''} ${fd.t === 'num' ? 'data-kind="number"' : ''} value="${esc(val)}" placeholder="${esc(fd.ph || '')}">${fd.hint ? `<small class="muted">${esc(fd.hint)}</small>` : ''}</label>`;
 }
-// paths: "landlord.name" (job.data) or "app.2.make" (appliance)
-function readPath(p) { const m = p.match(/^app\.(\d+)\.(\w+)$/); return m ? job.data.appliances[+m[1]]?.[m[2]] : get(job.data, p); }
+// paths: "landlord.name" (job.data) or "app.2.make" (row 2 of the form's repeating rows)
+const curForm = () => formById(job.kind);
+const rowsOf = () => (job.data[curForm().ROWS?.key || 'appliances'] ??= []);
+function readPath(p) { const m = p.match(/^app\.(\d+)\.(\w+)$/); return m ? rowsOf()[+m[1]]?.[m[2]] : get(job.data, p); }
 function writePath(p, v) {
-  const m = p.match(/^app\.(\d+)\.(\w+)$/);
-  if (m) { const a = job.data.appliances[+m[1]]; a[m[2]] = v;
-    if ((m[2] === 'co' || m[2] === 'co2') && (a.ratioAuto || !a.ratio)) { a.ratio = coRatio(a.co, a.co2); a.ratioAuto = true; const r = main.querySelector(`[data-p="app.${m[1]}.ratio"]`); if (r) r.value = a.ratio; }
-    if (m[2] === 'ratio') a.ratioAuto = false;
+  const f = curForm(); const m = p.match(/^app\.(\d+)\.(\w+)$/);
+  if (m) { const a = rowsOf()[+m[1]]; a[m[2]] = v;
+    for (const [co, co2, r] of f.ROWS?.ratios || []) { if ((m[2] === co || m[2] === co2) && (a[r + 'Auto'] || !a[r])) { a[r] = coRatio(a[co], a[co2]); a[r + 'Auto'] = true; const e = main.querySelector(`[data-p="app.${m[1]}.${r}"]`); if (e) e.value = a[r]; }
+      if (m[2] === r) a[r + 'Auto'] = false; }
   } else { set(job.data, p, v);
-    if (p === 'issue.date') { const n = plus12m(v); set(job.data, 'issue.nextDue', n); const e = main.querySelector('[data-p="issue.nextDue"]'); if (e) e.value = n; } }
+    for (const [co, co2, r] of f.sectionRatios || []) { if ((p === co || p === co2) && (get(job.data, r + 'Auto') || !get(job.data, r))) { set(job.data, r, coRatio(get(job.data, co), get(job.data, co2))); set(job.data, r + 'Auto', true); const e = main.querySelector(`[data-p="${r}"]`); if (e) e.value = get(job.data, r); }
+      if (p === r) set(job.data, r + 'Auto', false); }
+    if (f.id === 'tightness' && p === 't.mpd') job.data.t.mpdAuto = false;
+    if (f.nextDue && p === f.nextDue[0]) { const n = plus12m(v); set(job.data, f.nextDue[1], n); const e = main.querySelector(`[data-p="${f.nextDue[1]}"]`); if (e) e.value = n; } }
+  if (f.compute) { f.compute(job.data); refreshComputed(); }
   if (job.status === 'issued') { job.status = 'draft'; toast('Edited after issue – back to draft. Re-issue when done.'); }
   scheduleSave();
+}
+function refreshComputed() {
+  main.querySelectorAll('[data-calc]').forEach(o => { const v = readPath(o.dataset.calc) ?? ''; o.textContent = v || '–'; o.className = /^Fail/.test(v) ? 'bad' : /^Pass/.test(v) ? 'ok' : ''; });
+  main.querySelectorAll('[data-p]').forEach(el => { if (el === document.activeElement) return; const v = readPath(el.dataset.p) ?? ''; if (el.value !== String(v)) el.value = v; });
 }
 function bindFields(root) {
   root.querySelectorAll('[data-p]').forEach(el => { el.oninput = () => writePath(el.dataset.p, el.value); el.addEventListener('focus', () => (lastField = el)); });
   root.querySelectorAll('[data-kind="postcode"]').forEach(el => el.addEventListener('focus', () => (lastField = el)));
   root.querySelectorAll('[data-seg]').forEach(g => g.querySelectorAll('button').forEach(b => (b.onclick = () => {
     const was = b.classList.contains('on'); g.querySelectorAll('button').forEach(x => x.classList.remove('on'));
-    if (!was) b.classList.add('on'); writePath(g.dataset.seg, was ? '' : b.dataset.v); if (tab === 'sign') renderChecks(); })));
+    if (!was) b.classList.add('on'); writePath(g.dataset.seg, was ? '' : b.dataset.v); if (tab === 'sign') renderChecks();
+    if (g.dataset.seg.endsWith('.safe')) renderJob(); })));
   root.querySelectorAll('[data-pc]').forEach(b => (b.onclick = () => findAddress(b.dataset.pc, b.previousElementSibling)));
 }
 
 // ---------- editor ----------
 function renderJob() {
-  const f = formById(job.kind); top(job.reportNo, f.short + (job.status === 'issued' ? ' · issued' : ' · draft'), true);
-  const T = f.TABS; if (!T.some(t => t.id === tab)) tab = T[0].id;
-  $('#tabs').hidden = false; $('#tabs').innerHTML = T.map(t => `<a href="#/job/${job.id}/${t.id}" class="${t.id === tab ? 'on' : ''}">${esc(t.label)}${t.id === 'appliances' ? ` <span class="dot n">${job.data.appliances.length}</span>` : ''}</a>`).join('');
-  const t = T.find(x => x.id === tab); let html = '';
-  if (tab === 'details') html += `<div class="card ai"><b>📄 Photo import</b><p class="muted">Snap an old CP12 or job sheet – Gemini fills empty fields for you to check.</p><div class="btns">${photoBtns('form')}</div></div>`;
-  if (tab === 'details') html += `<div class="btns"><button class="btn" id="copyAddr">Landlord address = property address</button></div>`;
-  if (tab === 'appliances') html += appliancesHtml(f);
-  for (const sid of t.sections || []) { const s = f.SECTIONS.find(x => x.id === sid);
-    html += `<section class="card"><div class="apph"><h2>${esc(s.title)}</h2><button class="btn sm speak" data-speak="${sid}">🎙 Dictate</button></div>${s.fields.map(fd => fieldHtml(fd, get(job.data, fd.k) ?? '', fd.k)).join('')}</section>`; }
+  const f = curForm(); top(job.reportNo, f.short + (job.status === 'issued' ? ' · issued' : ' · draft'), true); document.body.classList.add('inform');
+  if (f.compute) f.compute(job.data);
+  const T = f.TABS; if (!T.some(t => t.id === tab)) tab = T[0].id; const ti = T.findIndex(x => x.id === tab);
+  $('#tabs').hidden = false; $('#tabs').innerHTML = T.map(t => `<a href="#/job/${job.id}/${t.id}" class="${t.id === tab ? 'on' : ''}">${icon(t.icon)}<span>${esc(t.label)}</span>${t.rows && !f.ROWS.max ? `<i class="n">${rowsOf().length}</i>` : ''}</a>`).join('');
+  const t = T[ti]; let html = `<div class="stepper">${T.map((x, i) => `<span class="${i < ti ? 'done' : i === ti ? 'on' : ''}"></span>`).join('')}<small>Step ${ti + 1} of ${T.length} · ${esc(t.label)}</small></div>`;
+  if (tab === 'details') html += `<div class="card ai"><div class="aih">${icon('cam')}<div><b>Photo import</b><p class="muted">Snap an old certificate or job sheet – Gemini fills empty fields for you to check.</p></div></div><div class="btns">${photoBtns('form')}</div></div>
+    <div class="btns"><button class="btn ghost" id="copyFrom">${icon('copy')} Copy customer & property from another certificate</button>${f.party !== 'landlord' || true ? `<button class="btn ghost" id="copyAddr">Property = ${esc(f.SECTIONS.find(s => s.id === f.party).title.toLowerCase())} address</button>` : ''}</div>`;
+  const secHtml = sid => { const s = f.SECTIONS.find(x => x.id === sid);
+    return `<section class="card"><div class="apph"><h2>${esc(s.title)}</h2><button class="btn sm speak" data-speak="${sid}">${icon('mic')} Dictate</button></div><div class="grid2">${s.fields.map(fd => fieldHtml(fd, get(job.data, fd.k) ?? '', fd.k)).join('')}</div></section>`; };
+  if (t.rows) { html += (t.sections || []).map(secHtml).join('') + rowsHtml(f); }
+  else html += (t.sections || []).map(secHtml).join('');
   if (tab === 'sign') html += signHtml();
   main.innerHTML = html; bindFields(main);
-  main.querySelectorAll('[data-speak]').forEach(b => (b.onclick = () => { const s = f.SECTIONS.find(x => x.id === b.dataset.speak);
-    speakSection(s.title, s.fields.map(fd => ({ ...fd }))); }));
-  if (tab === 'details') { bindPhoto('form', importWholeForm); $('#copyAddr').onclick = () => { const a = get(job.data, 'property.address'); if (!a) return toast('Enter the property address first');
-    writePath('landlord.address', a); main.querySelector('[data-p="landlord.address"]').value = a; }; }
-  if (tab === 'appliances') bindAppliances();
+  main.querySelectorAll('[data-speak]').forEach(b => (b.onclick = () => { const s = f.SECTIONS.find(x => x.id === b.dataset.speak); speakSection(s.title, s.fields.map(fd => ({ ...fd }))); }));
+  if (tab === 'details') { bindPhoto('form', importWholeForm); $('#copyFrom').onclick = copyFromCert;
+    $('#copyAddr') && ($('#copyAddr').onclick = () => { const src = f.party === 'landlord' ? 'property.address' : `${f.party}.address`, dst = f.party === 'landlord' ? 'landlord.address' : 'property.address';
+      const a = get(job.data, src); if (!a) return toast('Enter the address first'); writePath(dst, a); main.querySelector(`[data-p="${dst}"]`).value = a; toast('Address copied'); }); }
+  if (t.rows) bindRows(f);
   if (tab === 'sign') bindSign();
+  const next = T[ti + 1]; fab(next ? `<span>Next: ${esc(next.label)}</span>${icon('next')}` : '', () => (location.hash = `#/job/${job.id}/${next.id}`));
 }
-const photoBtns = id => `<button class="btn pri" data-cam="${id}">📷 Camera</button><button class="btn" data-gal="${id}">🖼 Gallery</button>
+const photoBtns = id => `<button class="btn pri" data-cam="${id}">${icon('cam')} Camera</button><button class="btn" data-gal="${id}">Gallery</button>
   <input type="file" accept="image/*" capture="environment" hidden data-camf="${id}"><input type="file" accept="image/*,application/pdf" hidden data-galf="${id}">`;
 function bindPhoto(id, fn) {
   const cam = main.querySelector(`[data-camf="${id}"]`), gal = main.querySelector(`[data-galf="${id}"]`);
@@ -177,31 +208,59 @@ function aiFail(e) {
     ${e.detail ? `<details><summary class="muted">Technical detail</summary><pre class="pre">${esc(e.detail)}</pre></details>` : ''}<div class="btns"><button class="btn" id="mclose">Close</button></div>`);
   $('#gos') && ($('#gos').onclick = closeModal);
 }
-
-// ---------- appliances ----------
-function appliancesHtml(f) {
-  return job.data.appliances.map((a, i) => `<section class="card app ${a.safe === 'No' ? 'unsafe' : ''}" data-i="${i}">
-    <div class="apph"><h2>Appliance ${i + 1}${a.location || a.type ? ` – ${esc([a.location, a.type].filter(Boolean).join(', '))}` : ''}</h2>
-      <button class="btn danger sm" data-del="${i}" aria-label="Remove">✕</button></div>
-    <button class="btn speak wide" data-speakapp="${i}">🎙 Dictate</button>
-    <div class="scan"><b>🏷 Scan data badge</b><div class="btns">${photoBtns('b' + i)}</div></div>
-    <div class="grid2">${f.APPLIANCE_FIELDS.map(fd => fieldHtml(fd, a[fd.k] ?? '', `app.${i}.${fd.k}`)).join('')}</div></section>`).join('')
-    + `<button class="btn big pri" id="addApp">＋ Add appliance</button>`;
+async function copyFromCert() {
+  const f = curForm(); const jobs = (await db.allJobs()).filter(j => j.id !== job.id).sort((a, b) => b.updated - a.updated).slice(0, 40);
+  if (!jobs.length) return toast('No other certificates saved yet');
+  modal(`<h2>Copy from…</h2><p class="muted">Copies the ${esc(f.SECTIONS.find(s => s.id === f.party).title.toLowerCase())} and property address into empty boxes.</p><div class="picks">${jobs.map(j => { const sf = formById(j.kind);
+    return `<button class="btn pickjob" data-j="${j.id}">${sf ? pill(sf) : ''}<span>${esc(sf?.summary?.(j.data) || j.reportNo)}</span><small>${esc(j.reportNo)}</small></button>`; }).join('')}</div><div class="btns"><button class="btn" id="mclose">Cancel</button></div>`);
+  $('#modalBody').querySelectorAll('[data-j]').forEach(b => (b.onclick = () => { const src = jobs.find(j => j.id === b.dataset.j); const sf = formById(src.kind);
+    const from = src.data[sf.party] || {}, to = (job.data[f.party] ??= {}); let n = 0;
+    for (const k of ['name', 'company', 'address', 'phone', 'email']) if (from[k] && !to[k] && f.SECTIONS.find(s => s.id === f.party).fields.some(x => x.k === `${f.party}.${k}`)) { to[k] = from[k]; n++; }
+    const pa = src.data.property?.address || from.address; if (pa && !get(job.data, 'property.address')) { set(job.data, 'property.address', pa); n++; }
+    if (src.data.property?.tenant && f.id === 'cp12' && !get(job.data, 'property.tenant')) { set(job.data, 'property.tenant', src.data.property.tenant); n++; }
+    closeModal(); scheduleSave(); renderJob(); toast(`Copied ${n} detail${n === 1 ? '' : 's'} from ${src.reportNo}`); }));
 }
-function bindAppliances() {
-  $('#addApp').onclick = () => { job.data.appliances.push(newAppliance()); scheduleSave(); renderJob(); setTimeout(() => main.querySelector('.app:last-of-type')?.scrollIntoView({ behavior: 'smooth' }), 50); };
-  main.querySelectorAll('[data-del]').forEach(b => (b.onclick = () => { const i = +b.dataset.del; const old = job.data.appliances[i];
-    job.data.appliances.splice(i, 1); scheduleSave(); renderJob(); toast('Appliance removed', 6000, { label: 'Undo', fn: () => { job.data.appliances.splice(i, 0, old); scheduleSave(); renderJob(); } }); }));
-  job.data.appliances.forEach((a, i) => bindPhoto('b' + i, url => scanBadgeFor(i, url)));
+
+// ---------- repeating rows (appliances / boiler / pipe runs) ----------
+function rowsHtml(f) {
+  const R = f.ROWS; const rows = rowsOf(); if (!rows.length && R.max) rows.push(R.newRow());
+  return rows.map((a, i) => `<section class="card app ${a.safe === 'No' ? 'unsafe' : ''}" data-i="${i}">
+    <div class="apph"><h2>${esc(R.title)}${R.max === 1 ? '' : ' ' + (i + 1)}${a.location || a.type || a.size ? ` <small>${esc([a.location, a.type || a.size].filter(Boolean).join(' · '))}</small>` : ''}</h2>
+      ${R.max === 1 ? '' : `<button class="btn ghost sm" data-del="${i}" aria-label="Remove">✕</button>`}</div>
+    <div class="btns rowtools"><button class="btn speak" data-speakapp="${i}">${icon('mic')} Dictate</button>${R.badge ? `<button class="btn" data-badge="${i}">${icon('tag')} Scan data badge</button>` : ''}</div>
+    ${R.badge ? `<input type="file" accept="image/*" capture="environment" hidden data-bcam="${i}"><input type="file" accept="image/*" hidden data-bgal="${i}">` : ''}
+    ${R.warn && a.safe === 'No' ? `<div class="unsafebar">${icon('warn')}<span>Unsafe – issue a warning notice</span><button class="btn delbtn sm" data-wn="${i}">Create warning notice</button></div>` : ''}
+    <div class="grid2">${R.fields.map(fd => fieldHtml(fd, a[fd.k] ?? '', `app.${i}.${fd.k}`)).join('')}</div></section>`).join('')
+    + (R.max && rows.length >= R.max ? '' : `<button class="btn big pri" id="addApp">${esc(R.add || '＋ Add')}</button>`);
+}
+function bindRows(f) {
+  const R = f.ROWS;
+  $('#addApp') && ($('#addApp').onclick = () => { rowsOf().push(R.newRow()); scheduleSave(); renderJob(); setTimeout(() => [...main.querySelectorAll('.app')].pop()?.scrollIntoView({ behavior: 'smooth' }), 50); });
+  main.querySelectorAll('[data-del]').forEach(b => (b.onclick = () => { const i = +b.dataset.del; const old = rowsOf()[i];
+    rowsOf().splice(i, 1); f.compute?.(job.data); scheduleSave(); renderJob(); toast(`${R.title} removed`, 6000, { label: 'Undo', fn: () => { rowsOf().splice(i, 0, old); f.compute?.(job.data); scheduleSave(); renderJob(); } }); }));
+  main.querySelectorAll('[data-badge]').forEach(b => { const i = +b.dataset.badge; const cam = main.querySelector(`[data-bcam="${i}"]`), gal = main.querySelector(`[data-bgal="${i}"]`);
+    b.onclick = () => { modal(`<h2>Scan data badge</h2><p class="muted">Photograph the appliance data plate straight on, without glare.</p><div class="btns"><button class="btn pri" id="bc">${icon('cam')} Camera</button><button class="btn" id="bg">Gallery</button><button class="btn" id="mclose">Cancel</button></div>`);
+      $('#bc').onclick = () => { closeModal(); cam.click(); }; $('#bg').onclick = () => { closeModal(); gal.click(); }; };
+    for (const inp of [cam, gal]) inp.onchange = async () => { const file = inp.files[0]; inp.value = ''; if (file) scanBadgeFor(i, await fileToDataUrl(file)); }; });
   main.querySelectorAll('[data-speakapp]').forEach(b => (b.onclick = () => { const i = +b.dataset.speakapp;
-    speakSection(`Appliance ${i + 1}`, formById(job.kind).APPLIANCE_FIELDS.map(fd => ({ ...fd, k: `app.${i}.${fd.k}` }))); }));
+    speakSection(`${R.title}${R.max === 1 ? '' : ' ' + (i + 1)}`, R.fields.map(fd => ({ ...fd, k: `app.${i}.${fd.k}` }))); }));
+  main.querySelectorAll('[data-wn]').forEach(b => (b.onclick = () => createWarning(+b.dataset.wn)));
+}
+async function createWarning(i) {
+  await saveNow(); const W = formById('warning'); const src = job; const fsrc = curForm();
+  const j = await newJob(W, W.fromUnsafe(src, fsrc, i, settings));
+  // record on the source certificate
+  if (fsrc.id === 'cp12') { set(src.data, 'defects.warningIssued', 'Yes'); set(src.data, 'defects.warningRef', j.reportNo); }
+  if (fsrc.id === 'service') set(src.data, 'work.warning', 'Yes');
+  src.updated = Date.now(); await db.putJob(src); toast(`Warning notice ${j.reportNo} started – ${src.reportNo} updated`, 6000);
 }
 async function scanBadgeFor(i, url) {
   const deps = aiBusy('Reading data badge…'); let r;
   try { r = await scanBadge(url, deps); } catch (e) { if (e.code === 'cancel') return; return aiFail(e); }
-  const app = job.data.appliances[i]; const rows = badgePlan(app, r.values);
+  const keys = new Set(curForm().ROWS.fields.map(x => x.k));
+  const app = rowsOf()[i]; const rows = badgePlan(app, r.values).filter(x => keys.has(x.k));
   if (!rows.length) return aiFail(new AiError('empty', 'Nothing readable on that badge. Try closer, straight on, without glare.'));
-  modal(`<h2>Check badge details</h2><p class="muted">Appliance ${i + 1}. Edit anything wrong, untick to skip. Read by ${esc(r.model)}.</p>
+  modal(`<h2>Check badge details</h2><p class="muted">${esc(curForm().ROWS.title)} ${i + 1}. Edit anything wrong, untick to skip. Read by ${esc(r.model)}.</p>
     ${rows.map((x, n) => `<div class="rev"><label class="chk"><input type="checkbox" data-on="${n}" ${x.on ? 'checked' : ''}> ${esc(BADGE_LABELS[x.k])}</label>
       <input data-val="${n}" value="${esc(x.val)}">${x.old && x.old !== x.val ? `<small class="muted">Currently: ${esc(x.old)} (will be replaced if ticked)</small>` : ''}</div>`).join('')}
     ${r.unreadable.length ? `<p class="warnp">Couldn’t read: ${r.unreadable.map(k => esc(BADGE_LABELS[k] || k)).join(', ')}</p>` : ''}${r.notes ? `<p class="muted">${esc(r.notes)}</p>` : ''}
@@ -210,23 +269,23 @@ async function scanBadgeFor(i, url) {
     closeModal(); scheduleSave(); renderJob(); main.querySelector(`.app[data-i="${i}"]`)?.scrollIntoView(); toast(`Filled ${n} field${n === 1 ? '' : 's'} from badge`); };
 }
 async function importWholeForm(url) {
-  const deps = aiBusy('Reading document…'); let r;
-  try { r = await importForm(url, deps); } catch (e) { if (e.code === 'cancel') return; return aiFail(e); }
-  const rows = [];
-  for (const sec of ['landlord', 'property', 'engineer', 'install', 'defects']) for (const [k, v] of Object.entries(r[sec] || {})) { const p = `${sec}.${k}`; const old = get(job.data, p) || '';
-    if (old !== v) rows.push({ p, label: `${sec[0].toUpperCase() + sec.slice(1)} – ${k}`, val: v, old, on: !old }); }
-  const apps = r.appliances || [];
+  const f = curForm(); const deps = aiBusy('Reading document…'); let r;
+  try { r = normImport(await askGemini(url, importPrompt(f), deps).then(x => x.json), f); } catch (e) { if (e.code === 'cancel') return; return aiFail(e); }
+  const flds = Object.fromEntries(f.SECTIONS.flatMap(s => s.fields.map(x => [x.k, { ...x, sec: s.title }])));
+  const rows = r.fields.map(x => ({ p: x.k, label: `${flds[x.k].sec} – ${flds[x.k].l}`, val: x.val, old: get(job.data, x.k) || '' })).filter(x => x.old !== x.val).map(x => ({ ...x, on: !x.old }));
+  const apps = r.rows || [];
   if (!rows.length && !apps.length) return aiFail(new AiError('empty', 'Nothing new could be read from that photo.'));
   modal(`<h2>Check imported details</h2><p class="muted">Ticked items fill in. Existing values are only replaced if you tick them.</p>
     ${rows.map((x, n) => `<div class="rev"><label class="chk"><input type="checkbox" data-on="${n}" ${x.on ? 'checked' : ''}> ${esc(x.label)}</label>
       ${x.val.includes('\n') ? `<textarea data-val="${n}">${esc(x.val)}</textarea>` : `<input data-val="${n}" value="${esc(x.val)}">`}${x.old ? `<small class="muted">Currently: ${esc(x.old)}</small>` : ''}</div>`).join('')}
-    ${apps.length ? `<label class="chk"><input type="checkbox" id="impApps" checked> Add ${apps.length} appliance${apps.length > 1 ? 's' : ''}: ${esc(apps.map(a => [a.location, a.make, a.model].filter(Boolean).join(' ')).join('; '))}</label>` : ''}
+    ${apps.length ? `<label class="chk"><input type="checkbox" id="impApps" checked> ${f.ROWS.max ? 'Fill' : 'Add'} ${apps.length} ${esc(f.ROWS.title.toLowerCase())}${apps.length > 1 ? 's' : ''}: ${esc(apps.map(a => [a.location, a.make, a.model, a.size].filter(Boolean).join(' ')).join('; '))}</label>` : ''}
     <div class="btns"><button class="btn" id="mclose">Cancel</button><button class="btn pri" id="fapply">✓ Apply</button></div>`);
   $('#fapply').onclick = () => { rows.forEach((x, n) => { if ($(`[data-on="${n}"]`).checked) set(job.data, x.p, $(`[data-val="${n}"]`).value.trim()); });
-    if (apps.length && $('#impApps')?.checked) { const blank = job.data.appliances.filter(a => Object.keys(a).every(k => ['gasType', 'owned', 'inspected'].includes(k)));
-      job.data.appliances = job.data.appliances.filter(a => !blank.includes(a)).concat(apps.map(a => ({ ...newAppliance(), ...a }))); }
-    if (get(job.data, 'issue.date')) set(job.data, 'issue.nextDue', get(job.data, 'issue.nextDue') || plus12m(get(job.data, 'issue.date')));
-    closeModal(); scheduleSave(); renderJob(); toast('Imported – please check every field'); };
+    if (apps.length && $('#impApps')?.checked) { const R = f.ROWS; const cur = rowsOf(); const blankKeys = Object.keys(R.newRow());
+      if (R.max) Object.assign(cur[0] ??= R.newRow(), Object.fromEntries(Object.entries(apps[0]).filter(([k]) => !cur[0][k] || blankKeys.includes(k))));
+      else { const keep = cur.filter(a => !Object.keys(a).every(k => blankKeys.includes(k))); job.data[R.key] = keep.concat(apps.map(a => ({ ...R.newRow(), ...a }))); } }
+    if (f.nextDue && get(job.data, f.nextDue[0]) && !get(job.data, f.nextDue[1])) set(job.data, f.nextDue[1], plus12m(get(job.data, f.nextDue[0])));
+    f.compute?.(job.data); closeModal(); scheduleSave(); renderJob(); toast('Imported – please check every field'); };
 }
 
 // ---------- address lookup ----------
@@ -248,18 +307,19 @@ async function findAddress(path, pcInput) {
 
 // ---------- sign & issue ----------
 function signHtml() {
-  const s = job.data.sigs || {};
-  return `<section class="card"><h2>Signatures</h2>${['engineer', 'recipient'].map(w => `<div class="sigbox"><span>${w === 'engineer' ? 'Engineer' : 'Recipient (landlord / agent / tenant)'}</span>
-    ${s[w] ? `<img src="${s[w]}" alt="signature">` : '<div class="sigempty">Not signed</div>'}<div class="btns"><button class="btn" data-sign="${w}">✍ ${s[w] ? 'Re-sign' : 'Sign'}</button>${s[w] ? `<button class="btn danger" data-clr="${w}">Clear</button>` : ''}</div></div>`).join('')}
+  const f = curForm(); const s = job.data.sigs || {};
+  return `<section class="card"><h2>Signatures</h2>${f.SIGS.map(({ k: w, l, refusable }) => `<div class="sigbox"><span>${esc(l)}</span>
+    ${s[w] ? `<img src="${s[w]}" alt="signature">` : `<div class="sigempty">${s[w + 'Refused'] ? 'Refused to sign' : 'Not signed'}</div>`}<div class="btns"><button class="btn" data-sign="${w}">✍ ${s[w] ? 'Re-sign' : 'Sign'}</button>${s[w] ? `<button class="btn ghost" data-clr="${w}">Clear</button>` : ''}
+    ${refusable && !s[w] ? `<label class="chk"><input type="checkbox" data-refused="${w}" ${s[w + 'Refused'] ? 'checked' : ''}> Refused to sign</label>` : ''}</div></div>`).join('')}
     ${settings.engineerSig && !s.engineer ? '<button class="btn" id="useSaved">Use my saved engineer signature</button>' : ''}</section>
     <section class="card"><h2>Checks before issue</h2><div id="checks"></div></section>
     <section class="card"><button class="btn big pri" id="issueBtn">${job.status === 'issued' ? '✓ Issued – re-issue' : 'Issue certificate'}</button>
-    <button class="btn big" id="pdfBtn">📄 Create PDF</button><button class="btn big" id="shareBtn" ${navigator.canShare ? '' : 'hidden'}>📤 Share PDF</button>
+    <div class="btns two"><button class="btn big" id="pdfBtn">${icon('doc')} Create PDF</button><button class="btn big" id="shareBtn" ${navigator.canShare ? '' : 'hidden'}>Share PDF</button></div>
     <label class="f"><span>Certificate ref</span><input id="refEdit" value="${esc(job.reportNo)}"></label>
     <button class="btn danger" id="delJob">Delete this certificate</button></section>`;
 }
 function renderChecks() {
-  const f = formById(job.kind); const issues = f.check(job.data);
+  const issues = curForm().check(job.data);
   $('#checks').innerHTML = issues.length ? issues.map(x => `<a class="issue ${x.lvl === 'warn' ? 'warn' : ''}" href="#/job/${job.id}/${x.tab}"><b>${x.lvl === 'bad' ? '✕' : '!'}</b><span>${esc(x.msg)}</span></a>`).join('') : '<p class="okp">✓ All checks complete</p>';
   return issues;
 }
@@ -267,25 +327,26 @@ function bindSign() {
   renderChecks();
   main.querySelectorAll('[data-sign]').forEach(b => (b.onclick = () => sigPad(b.dataset.sign)));
   main.querySelectorAll('[data-clr]').forEach(b => (b.onclick = () => { delete job.data.sigs[b.dataset.clr]; scheduleSave(); renderJob(); }));
+  main.querySelectorAll('[data-refused]').forEach(c => (c.onchange = () => { job.data.sigs[c.dataset.refused + 'Refused'] = c.checked; scheduleSave(); renderJob(); }));
   $('#useSaved') && ($('#useSaved').onclick = () => { job.data.sigs.engineer = settings.engineerSig; scheduleSave(); renderJob(); });
   $('#issueBtn').onclick = async () => { const bad = renderChecks().filter(x => x.lvl === 'bad');
     if (bad.length) return toast(`Fix ${bad.length} item${bad.length > 1 ? 's' : ''} marked ✕ first`);
     job.status = 'issued'; job.issuedAt = Date.now(); await saveNow(); renderJob(); toast('Issued ✓ – create or share the PDF'); };
   $('#pdfBtn').onclick = () => makePdf('download'); $('#shareBtn').onclick = () => makePdf('share');
   $('#refEdit').onchange = async e => { const v = e.target.value.trim().toUpperCase(); const jobs = await db.allJobs();
-    if (!v || isDuplicate(v, jobs, job.id)) { e.target.value = job.reportNo; return toast('That ref is empty or already used'); } job.reportNo = v; scheduleSave(); top(v, formById(job.kind).short, true); };
-  $('#delJob').onclick = () => { modal(`<h2>Delete ${esc(job.reportNo)}?</h2><p>This can’t be undone (unless you have a backup).</p><div class="btns"><button class="btn" id="mclose">Cancel</button><button class="btn danger" id="dok">Delete</button></div>`);
+    if (!v || isDuplicate(v, jobs, job.id)) { e.target.value = job.reportNo; return toast('That ref is empty or already used'); } job.reportNo = v; scheduleSave(); top(v, curForm().short, true); };
+  $('#delJob').onclick = () => { modal(`<h2>Delete ${esc(job.reportNo)}?</h2><p>This can’t be undone (unless you have a backup).</p><div class="btns"><button class="btn" id="mclose">Cancel</button><button class="btn delbtn" id="dok">Delete</button></div>`);
     $('#dok').onclick = async () => { const id = job.id; job = null; await db.deleteJob(id); closeModal(); location.hash = '#/'; }; };
 }
 async function makePdf(mode) {
   if (job.status !== 'issued') toast('Draft PDF – issue the certificate when complete');
-  const doc = buildCp12Pdf(job, settings); const name = pdfName(job);
+  const doc = buildPdf(job, settings); const name = pdfName(job);
   if (mode === 'share') { const file = new File([doc.output('blob')], name, { type: 'application/pdf' });
     if (navigator.canShare?.({ files: [file] })) { try { await navigator.share({ files: [file], title: name }); } catch {} return; } }
   doc.save(name);
 }
 function sigPad(who, onDone) {
-  modal(`<h2>Sign – ${who === 'engineer' ? 'engineer' : who === 'saved' ? 'save my signature' : 'recipient'}</h2><canvas id="sig" width="900" height="300"></canvas>
+  modal(`<h2>Sign – ${who === 'saved' ? 'save my signature' : esc((job && curForm().SIGS?.find(x => x.k === who)?.l) || who)}</h2><canvas id="sig" width="900" height="300"></canvas>
     <div class="btns"><button class="btn" id="mclose">Cancel</button><button class="btn" id="sclr">Clear</button><button class="btn pri" id="sok">✓ Done</button></div>`);
   const c = $('#sig'), x = c.getContext('2d'); x.lineWidth = 4; x.lineCap = x.lineJoin = 'round'; x.strokeStyle = '#0f172a'; let draw = false, inked = false;
   const pt = e => { const r = c.getBoundingClientRect(); return [(e.clientX - r.left) * c.width / r.width, (e.clientY - r.top) * c.height / r.height]; };

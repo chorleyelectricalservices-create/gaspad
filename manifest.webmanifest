@@ -1,4 +1,4 @@
-{ "name": "GasPad – gas safety certificates", "short_name": "GasPad", "description": "Landlord Gas Safety Records (CP12) on your phone, offline.",
-  "start_url": "./#/", "scope": "./", "display": "standalone", "orientation": "any", "background_color": "#f1f5f4", "theme_color": "#0b3b2e",
+{ "name": "GasPad – gas safety certificates", "short_name": "GasPad", "description": "Gas safety records, service records, warning notices, commissioning checklists and tightness tests – on your phone, offline.",
+  "start_url": "./#/", "scope": "./", "display": "standalone", "orientation": "any", "background_color": "#f3f6f4", "theme_color": "#0e4d3a",
   "icons": [ { "src": "icons/icon-192.png", "sizes": "192x192", "type": "image/png", "purpose": "any" }, { "src": "icons/icon-512.png", "sizes": "512x512", "type": "image/png", "purpose": "any" },
     { "src": "icons/icon-192-maskable.png", "sizes": "192x192", "type": "image/png", "purpose": "maskable" }, { "src": "icons/icon-512-maskable.png", "sizes": "512x512", "type": "image/png", "purpose": "maskable" } ] }

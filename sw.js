@@ -1,7 +1,7 @@
 // Offline-first service worker. Bump VERSION whenever any file changes.
-const VERSION = 'gaspad-v1.2.1';
+const VERSION = 'gaspad-v2.0.0';
 const ASSETS = ['./', 'index.html', 'styles.css', 'manifest.webmanifest',
-  'js/app.js', 'js/db.js', 'js/forms.js', 'js/cp12.js', 'js/ai.js', 'js/pdf.js', 'js/refno.js', 'js/address.js', 'js/fieldvoice.js', 'js/voice.js', 'js/speak.js', 'js/sr.js',
+  'js/app.js', 'js/db.js', 'js/forms.js', 'js/cp12.js', 'js/ai.js', 'js/pdf.js', 'js/refno.js', 'js/address.js', 'js/fieldvoice.js', 'js/voice.js', 'js/speak.js', 'js/sr.js', 'js/common.js', 'js/service.js', 'js/warning.js', 'js/commission.js', 'js/tightness.js', 'js/importer.js', 'js/icons.js',
   'vendor/jspdf.umd.min.js', 'vendor/jspdf.plugin.autotable.min.js',
   'icons/icon-192.png', 'icons/icon-512.png', 'icons/icon-192-maskable.png', 'icons/icon-512-maskable.png'];
 self.addEventListener('install', e => { e.waitUntil(caches.open(VERSION).then(c => c.addAll(ASSETS.map(u => new Request(u, { cache: 'reload' })))).then(() => self.skipWaiting())); });

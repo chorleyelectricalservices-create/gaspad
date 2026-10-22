@@ -78,10 +78,10 @@ export const SECTIONS = [
 ];
 
 export const TABS = [
-  { id: 'details', label: 'Details', sections: ['landlord', 'property', 'engineer'] },
-  { id: 'appliances', label: 'Appliances' },
-  { id: 'install', label: 'Checks', sections: ['install', 'defects'] },
-  { id: 'sign', label: 'Sign & issue', sections: ['issue'] },
+  { id: 'details', label: 'Details', icon: 'user', sections: ['landlord', 'property', 'engineer'] },
+  { id: 'appliances', label: 'Appliances', icon: 'flame', rows: true },
+  { id: 'install', label: 'Checks', icon: 'check', sections: ['install', 'defects'] },
+  { id: 'sign', label: 'Sign', icon: 'sign', sections: ['issue'] },
 ];
 
 export const get = (o, path) => path.split('.').reduce((a, k) => (a == null ? a : a[k]), o);
@@ -139,6 +139,8 @@ export function check(d) {
   return out;
 }
 
-export const CP12 = { id: 'cp12', code: 'CP12', title: 'Landlord Gas Safety Record (CP12)', short: 'CP12 / LGSR', icon: '🔥', active: true,
-  SECTIONS, TABS, APPLIANCE_FIELDS, defaults, check,
+export const SIGS = [{ k: 'engineer', l: 'Engineer' }, { k: 'recipient', l: 'Recipient (landlord / agent / tenant)' }];
+export const CP12 = { id: 'cp12', code: 'CP12', title: 'Landlord Gas Safety Record (CP12)', short: 'CP12 / LGSR', icon: 'flame', active: true, party: 'landlord',
+  SECTIONS, TABS, APPLIANCE_FIELDS, SIGS, defaults, check, nextDue: ['issue.date', 'issue.nextDue'],
+  ROWS: { key: 'appliances', title: 'Appliance', add: '＋ Add appliance', fields: APPLIANCE_FIELDS, badge: true, warn: true, newRow: () => newAppliance(), ratios: [['co', 'co2', 'ratio']] },
   summary: d => [d.property?.address?.split('\n')[0], d.landlord?.name].filter(Boolean).join(' · ') };

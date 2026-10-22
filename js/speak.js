@@ -61,7 +61,7 @@ export function normText(raw) {
 export function parseSpeech(transcript, fields) {
   const text = normText(transcript); const hits = [];
   const keyOf = f => f.k.split('.').pop();
-  const aliasList = fields.flatMap(f => (ALIASES[keyOf(f)] || [f.l?.toLowerCase()]).filter(Boolean).map(a => ({ f, a: normText(a) })))
+  const aliasList = fields.filter(f => f.t !== 'calc').flatMap(f => (f.al || ALIASES[keyOf(f)] || labelAliases(f)).filter(Boolean).map(a => ({ f, a: normText(a) })))
     .sort((x, y) => y.a.length - x.a.length);
   const taken = new Array(text.length).fill(false);
   for (const { f, a } of aliasList) {
@@ -83,18 +83,28 @@ export function parseSpeech(transcript, fields) {
   return out;
 }
 
+export const labelAliases = f => { const l = String(f.l || '').toLowerCase().replace(/\(.*?\)/g, '').replace(/[^a-z0-9₂ ]+/g, ' ').replace(/₂/g, '2').replace(/\s+/g, ' ').trim(); return l ? [l] : []; };
+/** Best list option by matching words/numbers ("copper 22" -> "Copper 22mm"). Numbers must agree. */
+export function bestOpt(opts, r) {
+  const rw = new Set(wordsToNumbers(r).toLowerCase().split(/[^a-z0-9.]+/).filter(Boolean)); let best = '', score = 0;
+  for (const o of opts) { const toks = o.toLowerCase().split(/[^a-z0-9.]+/).filter(t => t.length >= 2 || /\d/.test(t)).map(t => t.replace(/^(\d+(?:\.\d+)?)(mm|m)$/, '$1'));
+    const nums = toks.filter(t => /^\d/.test(t)); if (nums.length && !nums.some(t => rw.has(t))) continue;
+    const sc = toks.filter(t => rw.has(t)).length; if (sc > score) { score = sc; best = o; } }
+  return best;
+}
 const cap = s => s.charAt(0).toUpperCase() + s.slice(1);
 export function normValue(f, raw) {
   const k = f.k.split('.').pop(); const r = raw.trim(); const opts = f.opts || [];
   if (f.t === 'seg' || f.t === 'list') {
     if (k === 'flue') { if (/room ?seal|^r ?s\b|^are s\b|^c ?type/.test(r)) return 'RS'; if (/balanced|^b ?f\b/.test(r)) return 'BF'; if (/flue ?less|^f ?l\b|^a ?type/.test(r)) return 'FL'; if (/open|^o ?f\b|^oh f|conventional|^b ?type/.test(r)) return 'OF'; return ''; }
-    if (k === 'gasType') return /lpg|l p g|propane|butane|bottled/.test(r) ? 'LPG' : /natural|^ng\b|mains|g ?20/.test(r) ? 'Natural gas' : '';
-    if (k === 'warningCat') return /immediately|^i ?d\b/.test(r) ? 'ID' : /at risk|^a ?r\b/.test(r) ? 'AR' : NA.test(r) ? 'N/A' : '';
+    if (k === 'gasType' || (opts.includes('LPG') && opts.includes('Natural gas'))) return /lpg|l p g|propane|butane|bottled/.test(r) ? 'LPG' : /natural|^ng\b|mains|g ?20/.test(r) ? 'Natural gas' : '';
+    if (k === 'warningCat' || opts.includes('ID')) return /immediately|^i ?d\b/.test(r) ? 'ID' : /at risk|^a ?r\b/.test(r) ? 'AR' : NA.test(r) ? 'N/A' : '';
     if (k === 'recipientRole') return /tenant/.test(r) ? 'Tenant' : /agent/.test(r) ? 'Agent' : /landlord|owner/.test(r) ? 'Landlord' : '';
-    if (f.t === 'list') { const hit = opts.find(o => r.includes(o.toLowerCase())) || opts.find(o => r.includes(o.toLowerCase().split(' ')[0])); return hit || cap(r); }
+    if (f.t === 'list') { const hit = opts.find(o => r.includes(o.toLowerCase())) || bestOpt(opts, r); return hit || cap(r); }
     if (opts.includes('Pass')) return NA.test(r) ? 'N/A' : PASS.test(r) ? 'Pass' : FAIL.test(r) ? 'Fail' : '';
     if (opts.includes('Yes')) return NA.test(r) && opts.includes('N/A') ? 'N/A' : NO.test(r) && !/^not? ?applicable/.test(r) ? 'No' : YES.test(r) ? 'Yes' : '';
-    return opts.find(o => o.toLowerCase() === r) || '';
+    const lo = o => o.toLowerCase();
+    return opts.find(o => lo(o) === r) || opts.find(o => r.startsWith(lo(o))) || opts.find(o => lo(o).split(/[\s/()]+/).some(w => w.length >= 2 && new RegExp(`\\b${w.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}\\b`).test(r))) || '';
   }
   if (f.t === 'num') { const n = wordsToNumbers(r).replace(/(\d) point (\d)/g, '$1.$2').match(/\d+(\.\d+)?|\.\d+/); return n ? (n[0].startsWith('.') ? '0' + n[0] : n[0]) : ''; }
   if (f.t === 'email') return normaliseForField('email', r);

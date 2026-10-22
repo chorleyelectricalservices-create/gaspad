@@ -7,7 +7,7 @@ import { FORMS } from '../js/forms.js';
 test('next due +12 months', () => { assert.equal(plus12m('2026-10-16'), '2027-10-16'); assert.equal(plus12m('2024-02-29'), '2025-02-28'); });
 test('ratio', () => { assert.equal(coRatio(40, 9.1), '0.0004'); assert.equal(coRatio('', 9), ''); });
 test('refs', () => { const a = allocateRef({ refPrefix: 'GAS', nextNumber: 1 }, [], new Date(2026, 9, 1), 'CP12'); assert.equal(a.ref, 'GAS-CP12-2610-0001'); });
-test('registry: CP12 active, 4 coming soon', () => { assert.equal(FORMS.filter(f => f.active).map(f => f.id).join(), 'cp12'); assert.equal(FORMS.filter(f => !f.active).length, 4); });
+test('registry: all five forms active with unique codes', () => { assert.equal(FORMS.filter(f => f.active).map(f => f.id).join(), 'cp12,service,warning,commission,tightness'); assert.equal(new Set(FORMS.map(f => f.code)).size, 5); });
 test('checks flag unsafe without warning notice', () => {
   const d = defaults(); d.appliances[0] = { safe: 'No', type: 'Gas fire', location: 'Lounge' };
   assert.ok(check(d).some(x => /no warning notice/.test(x.msg)));
